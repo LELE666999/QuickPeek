@@ -1,0 +1,28 @@
+# macOS / Xcode local state
+.DS_Store
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# Build products and Swift package caches
+build/
+.build/
+.swiftpm/
+*.app/
+*.dSYM/
+*.xcarchive/
+
+# Local configuration, credentials and diagnostics
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.pem
+*.key
+*.mobileprovision
+*.log
+
+# Python test caches
+__pycache__/
+*.py[cod]

@@ -1,0 +1,49 @@
+name: QuickPeek
+options:
+  bundleIdPrefix: com.quickpeek
+  deploymentTarget:
+    macOS: "26.0"
+  xcodeVersion: "16.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+
+packages:
+  TimelineKit:
+    path: Packages/TimelineKit
+  QuickPeekTimeline:
+    path: Packages/QuickPeekTimeline
+  SDWebImage:
+    url: https://github.com/SDWebImage/SDWebImage.git
+    from: 5.21.7
+  SDWebImageWebPCoder:
+    url: https://github.com/SDWebImage/SDWebImageWebPCoder.git
+    from: 0.15.0
+
+targets:
+  QuickPeek:
+    type: application
+    platform: macOS
+    sources:
+      - QuickPeek
+    dependencies:
+      - package: TimelineKit
+        product: TimelineKitCore
+      - package: QuickPeekTimeline
+      - package: SDWebImage
+      - package: SDWebImageWebPCoder
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quickpeek.app
+        PRODUCT_NAME: QuickPeek
+        INFOPLIST_FILE: QuickPeek/Info.plist
+        GENERATE_INFOPLIST_FILE: false
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: KRDC99G2JH
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_ENTITLEMENTS: QuickPeek/QuickPeek.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
