@@ -125,12 +125,15 @@ final class TimelineEditorSession {
         for _ in 0..<6 {
             guard let value = current else { break }
             details.append("\(value.domain) (\(value.code)): \(value.localizedDescription)")
+            if let reason = value.localizedFailureReason { details.append(reason) }
             current = value.userInfo[NSUnderlyingErrorKey] as? NSError
         }
         errorTitle = operation
         errorDetails = details.joined(separator:"\n")
         let value = failure as NSError
-        let reason = value.localizedDescription == "Operation Stopped" ? "系统中止了这次操作。" : value.localizedDescription
+        let reason = value.domain == AVFoundationErrorDomain && value.code == AVError.operationNotSupportedForAsset.rawValue
+            ? "当前媒体或音视频轨道配置不支持这次导出。"
+            : (value.localizedFailureReason ?? (value.localizedDescription == "Operation Stopped" ? "系统中止了这次操作。" : value.localizedDescription))
         error = "\(reason)\n\n\(value.domain) · \(value.code)\n原视频和当前剪辑仍保留，可重试。"
         let logURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/QuickPeek/editor-errors.log")
         try? FileManager.default.createDirectory(at:logURL.deletingLastPathComponent(),withIntermediateDirectories:true)

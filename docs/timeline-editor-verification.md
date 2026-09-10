@@ -71,3 +71,9 @@ PPT 通过 macOS qlmanage 输出 Quick Look HTML，再由应用内 WebKit 按页
 - 临时应用事件记录代码已移除，诊断日志只保留测试结果，不含文件内容。
 
 已通过手势逻辑与连续 PDFKit 页面测试；代码审查指出的编辑时切图及关闭动画竞态均已修复。真实触控板捏合仍待用户回来确认，不宣称已完成硬件验收。
+
+## 2026-09-10 空音轨导致 MP4 导出失败
+
+使用本机 last-export-project.json 重放：24561.mp4 裁去开头约 1.956 秒，保留约 13.232 秒，音频轨道无片段。旧实现仍创建空 AVComposition 音轨，真实导出立即复现 AVFoundation -11838 / NSOSStatus -16976。只改为跳过无有效片段的轨道后，同一项目导出成功，输出无音频，1264×1848，13.231533 秒；ffmpeg 全片解码无错误。
+
+新增 ExportSnapshotTests：本机失败快照重放（可选环境变量 QUICKPEEK_EXPORT_PROJECT），以及标准音视频素材解除绑定后删除全部音频仍能导出视频的回归测试。Swift package 检查、原生时间线交互检查、输出画面/音频区间检查通过。错误详情补充 localizedFailureReason，-11838 不再仅显示泛化的“系统中止”。样例媒体和项目快照不纳入仓库。

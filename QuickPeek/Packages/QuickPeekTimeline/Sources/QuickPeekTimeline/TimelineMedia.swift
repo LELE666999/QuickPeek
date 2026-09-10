@@ -9,11 +9,16 @@ public enum TimelineMedia {
         let audios = try await source.loadTracks(withMediaType: .audio)
         let composition = AVMutableComposition()
         for track in state.timeline.tracks {
+            // Keep empty lanes in the editor, not in the exported media. An
+            // empty composition audio track has no format and makes MP4 export
+            // fail with AVFoundation -11838 / OSStatus -16976.
+            let clips = track.segments.filter { ($0.sourceRange?.duration ?? 0) > 0 }
+            guard !clips.isEmpty else { continue }
             let isVideo = track.kind == .video
             guard let input = (isVideo ? videos : audios).first,
                   let output = composition.addMutableTrack(withMediaType: isVideo ? .video : .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
             if isVideo { output.preferredTransform = try await input.load(.preferredTransform) }
-            for clip in track.segments.sorted(by: { $0.targetRange.start < $1.targetRange.start }) {
+            for clip in clips.sorted(by: { $0.targetRange.start < $1.targetRange.start }) {
                 guard let range = clip.sourceRange else { continue }
                 try Task.checkCancellation()
                 try output.insertTimeRange(CMTimeRange(start: CMTime(seconds: range.start, preferredTimescale: 60000), duration: CMTime(seconds: range.duration, preferredTimescale: 60000)), of: input, at: CMTime(seconds: clip.targetRange.start, preferredTimescale: 60000))
