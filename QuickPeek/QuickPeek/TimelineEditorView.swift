@@ -220,7 +220,7 @@ struct TimelineEditorView: View {
                 Spacer()
                 Button { help.toggle() } label: { Image(systemName: "questionmark.circle") }
                     .popover(isPresented: $help) {
-                        Text("点击时间线定位，⌘B / Control-B 分割。\n⌘点击多选，Shift 点击连续选择，空白处拖动框选。\n拖动片段调整前后顺序，松手自动接拢。\nOption-Shift 拖动自由移动，靠近边缘自动吸附。\n拖动两端裁剪并衔接；Option 拖动平移时间轴。\n音画默认关联；右键可解除关联，分别编辑。\nDelete 删除，⌘Z 撤销，⇧⌘Z 重做。\n解除关联的片段删除后保留空隙，避免其他轨道错位。\n\n时间线数据基础：TimelineKitCore · MIT\nCopyright © 2026 Ivan Yang\n完整许可见应用内 ThirdPartyNotices.txt")
+                        Text("点击时间线定位，⌘B / Control-B 分割。\n⌘点击多选，Shift 点击连续选择，空白处拖动框选。\n单击定位播放头；长按片段浮起后拖动排序，松手接拢。\nOption-Shift 拖动自由移动，靠近边缘自动吸附。\n拖动两端裁剪并衔接；Option 拖动平移时间轴。\n音画默认关联；右键可解除关联，分别编辑。\nDelete 删除，⌘Z 撤销，⇧⌘Z 重做。\n解除关联的片段删除后保留空隙，避免其他轨道错位。\n\n时间线数据基础：TimelineKitCore · MIT\nCopyright © 2026 Ivan Yang\n完整许可见应用内 ThirdPartyNotices.txt")
                             .font(.system(size: 13)).padding(20).frame(width: 430)
                     }
                 Button(session.busy ? "导出中…" : "导出副本") { session.export() }
@@ -331,7 +331,16 @@ private final class EditTimelineCanvas: NSView {
     private var dragScrollTimer: Timer?
     private var lastDragEvent: NSEvent?
     private var panning = false
-        private var down = NSPoint.zero
+    private var holdTimer: Timer?
+    private var isClipLifted = false
+    private var isScrubbing = false
+    private var cancelledPointerSequence = false
+    private var motionTimer: Timer?
+    private var motionTime = ProcessInfo.processInfo.systemUptime
+    private var displayRects: [UUID: NSRect] = [:]
+    private var targetRects: [UUID: NSRect] = [:]
+    private var focusObserver: NSObjectProtocol?
+    private var down = NSPoint.zero
     private var dragPoint = NSPoint.zero
     private var hitID: UUID?
     private var edge: TrimEdge?
@@ -348,6 +357,9 @@ private final class EditTimelineCanvas: NSView {
         guard let window else { return }
         TapSharedState.shared.timelineEditing = true
         oldWindow = window; movable = window.isMovableByWindowBackground; window.isMovableByWindowBackground = false
+        focusObserver = NotificationCenter.default.addObserver(forName:NSWindow.didResignKeyNotification,object:window,queue:.main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.cancelInteraction() }
+        }
         monitor = NSEvent.addLocalMonitorForEvents(matching:.keyDown) { [weak self] event in
             guard let self, let window = self.window, event.window === window, window.isKeyWindow,
                   window.attachedSheet == nil, !(window.firstResponder is NSTextView), self.session?.busy == false else { return event }
@@ -355,6 +367,10 @@ private final class EditTimelineCanvas: NSView {
         }
     }
     func stopMonitoring() {
+        cancelInteraction()
+        motionTimer?.invalidate(); motionTimer = nil
+        displayRects.removeAll(); targetRects.removeAll()
+        if let focusObserver { NotificationCenter.default.removeObserver(focusObserver); self.focusObserver = nil }
         dragScrollTimer?.invalidate(); dragScrollTimer = nil; lastDragEvent = nil
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
         if let oldWindow { oldWindow.isMovableByWindowBackground = movable }
@@ -363,6 +379,10 @@ private final class EditTimelineCanvas: NSView {
     }
     func handle(_ event: NSEvent) -> Bool {
         guard let session else { return false }
+        if hitID != nil {
+            if event.keyCode == 53 { cancelInteraction() }
+            return true
+        }
         let cmd = event.modifierFlags.contains(.command), ctrl = event.modifierFlags.contains(.control)
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "b" where cmd || ctrl: session.split()
@@ -378,6 +398,72 @@ private final class EditTimelineCanvas: NSView {
         needsDisplay = true
         return true
     }
+    private func cancelInteraction() {
+        cancelledPointerSequence = true
+        holdTimer?.invalidate(); holdTimer = nil
+        dragScrollTimer?.invalidate(); dragScrollTimer = nil; lastDragEvent = nil
+        dragBase = nil; dragPreview = nil; hitID = nil; edge = nil
+        isClipLifted = false; isScrubbing = false; panning = false; box = nil; snapGuide = nil
+        NSCursor.arrow.set()
+        refreshMotionTargets()
+    }
+    private func beginLift() {
+        holdTimer?.invalidate(); holdTimer = nil
+        guard hitID != nil, edge == nil, !isScrubbing, session?.busy == false, window != nil else { return }
+        isClipLifted = true
+        NSCursor.closedHand.set()
+        refreshMotionTargets()
+    }
+    private func refreshMotionTargets() {
+        guard let session else { return }
+        let drawing = dragPreview ?? session.edits
+        var next: [UUID:NSRect] = [:]
+        for (t,track) in drawing.state.timeline.tracks.enumerated() {
+            for clip in track.segments {
+                var target = rect(clip,track:t)
+                if displayRects[clip.id] == nil {
+                    let original = dragBase?.state.timeline.tracks[t].segments.first { $0.id == clip.id }
+                    displayRects[clip.id] = original.map { rect($0,track:t) } ?? target
+                }
+                if isClipLifted, let base = dragBase, base.state.selection.contains(clip.id),
+                   let original = base.state.timeline.tracks[t].segments.first(where: { $0.id == clip.id }) {
+                    target = rect(original,track:t).offsetBy(dx:dragPoint.x-down.x,dy:-5)
+                    target = target.insetBy(dx:-min(6,target.width*0.025),dy:-3)
+                }
+                next[clip.id] = target
+            }
+        }
+        targetRects = next
+        displayRects = displayRects.filter { next[$0.key] != nil }
+        if motionTimer == nil {
+            motionTime = ProcessInfo.processInfo.systemUptime
+            let timer = Timer(timeInterval:1.0/60,repeats:true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.stepMotion() }
+            }
+            motionTimer = timer
+            RunLoop.main.add(timer,forMode:.common)
+        }
+        needsDisplay = true
+    }
+    private func stepMotion() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let amount = 1-exp(-min(0.1,now-motionTime)/0.055)
+        motionTime = now
+        var moving = false
+        for (id,target) in targetRects {
+            let current = displayRects[id] ?? target
+            let distance = abs(target.minX-current.minX)+abs(target.minY-current.minY)+abs(target.width-current.width)+abs(target.height-current.height)
+            if distance < 0.3 { displayRects[id] = target; continue }
+            moving = true
+            displayRects[id] = NSRect(x:current.minX+(target.minX-current.minX)*amount,
+                y:current.minY+(target.minY-current.minY)*amount,
+                width:current.width+(target.width-current.width)*amount,
+                height:current.height+(target.height-current.height)*amount)
+        }
+        needsDisplay = true
+        if !moving { motionTimer?.invalidate(); motionTimer = nil }
+    }
+
     private func rect(_ clip: EditorSegment, track: Int) -> NSRect {
         NSRect(x:16+clip.targetRange.start*scale,y:34+Double(track)*72,width:max(2,clip.targetRange.duration*scale),height:62)
     }
@@ -406,11 +492,26 @@ private final class EditTimelineCanvas: NSView {
             NSColor.separatorColor.setStroke(); let line = NSBezierPath(); line.move(to:NSPoint(x:x,y:27)); line.line(to:NSPoint(x:x,y:bounds.height)); line.stroke()
             tick += step
         }
+        // Draw floating clips last, above the smoothly displaced neighboring clips.
+        for floatingPass in [false,true] {
         for (t,track) in drawing.state.timeline.tracks.enumerated() {
             for (index,clip) in track.segments.enumerated() {
-                let r = rect(clip,track:t)
+                let floating = isClipLifted && (dragBase?.state.selection.contains(clip.id) ?? false)
+                guard floating == floatingPass else { continue }
+                let r = (motionTimer != nil || isClipLifted) ? (displayRects[clip.id] ?? rect(clip,track:t)) : rect(clip,track:t)
                 guard r.intersects(visible) else { continue }
                 let selected = drawing.state.selection.contains(clip.id)
+                if floating {
+                    let slot = NSBezierPath(roundedRect:rect(clip,track:t).insetBy(dx:2,dy:2),xRadius:5,yRadius:5)
+                    NSColor.controlAccentColor.withAlphaComponent(0.10).setFill();slot.fill()
+                    NSColor.controlAccentColor.withAlphaComponent(0.45).setStroke();slot.stroke()
+                    NSGraphicsContext.saveGraphicsState()
+                    let shadow=NSShadow();shadow.shadowColor=NSColor.black.withAlphaComponent(0.45)
+                    shadow.shadowBlurRadius=12;shadow.shadowOffset=NSSize(width:0,height:-3);shadow.set()
+                    NSColor.windowBackgroundColor.setFill()
+                    NSBezierPath(roundedRect:r,xRadius:7,yRadius:7).fill()
+                    NSGraphicsContext.restoreGraphicsState()
+                }
                 let color: NSColor = t == 0 ? .systemBlue : .systemTeal
                 NSGraphicsContext.saveGraphicsState()
                 let path = NSBezierPath(roundedRect:r.insetBy(dx:1,dy:1),xRadius:5,yRadius:5)
@@ -436,7 +537,8 @@ private final class EditTimelineCanvas: NSView {
                     wave.stroke()
                 }
                 let linked = drawing.state.links[clip.id] != nil ? " ⛓" : ""
-                text("\(t == 0 ? "视频" : "音频") \(index+1)\(linked)",at:NSPoint(x:r.minX+8,y:r.minY+3),color:.labelColor)
+                let labelIndex = dragBase?.state.timeline.tracks[t].segments.firstIndex(where: { $0.id == clip.id }) ?? index
+                text("\(t == 0 ? "视频" : "音频") \(labelIndex+1)\(linked)",at:NSPoint(x:r.minX+8,y:r.minY+3),color:.labelColor)
                 NSGraphicsContext.restoreGraphicsState()
                 (selected ? NSColor.controlAccentColor : NSColor.white.withAlphaComponent(0.15)).setStroke()
                 path.lineWidth = selected ? 2 : 1; path.stroke()
@@ -446,6 +548,7 @@ private final class EditTimelineCanvas: NSView {
                     NSRect(x:r.maxX-5,y:r.midY-8,width:2,height:16).fill()
                 }
             }
+        }
         }
         if let box {
             NSColor.controlAccentColor.withAlphaComponent(0.15).setFill(); box.fill()
@@ -463,6 +566,9 @@ private final class EditTimelineCanvas: NSView {
     }
     override func mouseDown(with event: NSEvent) {
         guard let session, !session.busy else { return }
+        cancelInteraction()
+        cancelledPointerSequence = false
+        motionTimer?.invalidate(); motionTimer = nil; displayRects.removeAll(); targetRects.removeAll()
         window?.makeFirstResponder(self)
         down = convert(event.locationInWindow,from:nil); dragPoint = down; flags = event.modifierFlags
         originalSelection = session.edits.state.selection
@@ -470,7 +576,7 @@ private final class EditTimelineCanvas: NSView {
         dragBase = nil; dragPreview = nil; snapGuide = nil
         panning = flags.contains(.option) && !flags.contains(.shift)
         if panning { return }
-        session.player.pause(); session.seek(time(down))
+        session.player.pause()
         if let (clip,t) = hit(down) {
             hitID = clip.id; anchorRange = clip.targetRange
             let r = rect(clip,track:t)
@@ -481,14 +587,27 @@ private final class EditTimelineCanvas: NSView {
                 if !session.edits.state.selection.contains(clip.id) { session.edits.select(clip.id) }
             }
             else if !session.edits.state.selection.contains(clip.id) || flags.contains(.command) || (flags.contains(.shift) && !flags.contains(.option)) { session.select(clip.id,flags:flags) }
-        } else if down.y > 30 && !flags.contains(.command) { session.edits.selectMany([]) }
-        if hitID != nil { dragBase = session.edits }
+        } else {
+            session.seek(time(down))
+            if down.y > 30 && !flags.contains(.command) { session.edits.selectMany([]) }
+        }
+        if hitID != nil {
+            dragBase = session.edits
+            if edge != nil || flags.contains([.option,.shift]) { session.seek(time(down)) }
+            else {
+                let timer = Timer(timeInterval:0.28,repeats:false) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.beginLift() }
+                }
+                holdTimer = timer; RunLoop.main.add(timer,forMode:.common)
+            }
+        }
         needsDisplay = true
     }
     private func updateDrag(at point: NSPoint) {
         guard let base = dragBase, let range = anchorRange, let session else { return }
+        guard edge != nil || isClipLifted || flags.contains([.option,.shift]) else { return }
         dragPoint = point
-        guard abs(point.x-down.x) > 3 else { dragPreview = base; snapGuide = nil; needsDisplay = true; return }
+        guard abs(point.x-down.x) > 3 else { dragPreview = base; snapGuide = nil; refreshMotionTargets(); return }
         var preview = base
         let proposed = (point.x-down.x)/scale
         snapGuide = nil
@@ -508,7 +627,7 @@ private final class EditTimelineCanvas: NSView {
             let movedEdges = preview.segments.filter { base.state.selection.contains($0.id) }.flatMap { [$0.targetRange.start,$0.targetRange.end] }
             snapGuide = edges.first { fixed in movedEdges.contains { abs($0-fixed)<0.00001 } }
         }
-        dragPreview = preview; needsDisplay = true
+        dragPreview = preview; refreshMotionTargets()
     }
     private func continueEdgeScroll() {
         guard let event = lastDragEvent, let scroll = enclosingScrollView else { return }
@@ -522,6 +641,7 @@ private final class EditTimelineCanvas: NSView {
         updateDrag(at:convert(event.locationInWindow,from:nil))
     }
     override func mouseDragged(with event: NSEvent) {
+        guard !cancelledPointerSequence else { return }
         guard let session, !session.busy else { return }
         dragPoint = convert(event.locationInWindow,from:nil)
         if panning, let scroll = enclosingScrollView {
@@ -531,6 +651,13 @@ private final class EditTimelineCanvas: NSView {
             return
         }
         if hitID != nil {
+            if edge == nil && !isClipLifted && !flags.contains([.option,.shift]) {
+                if isScrubbing || hypot(dragPoint.x-down.x,dragPoint.y-down.y) > 6 {
+                    holdTimer?.invalidate();holdTimer = nil;isScrubbing = true
+                    session.seek(time(dragPoint)); needsDisplay = true
+                }
+                return
+            }
             updateDrag(at:dragPoint)
             lastDragEvent = event
             if dragScrollTimer == nil {
@@ -554,13 +681,20 @@ private final class EditTimelineCanvas: NSView {
         autoscroll(with:event); needsDisplay = true
     }
     override func mouseUp(with event: NSEvent) {
-        guard let session, !session.busy else { return }
+        guard !cancelledPointerSequence else { return }
+        guard let session, !session.busy else { cancelInteraction(); return }
+        holdTimer?.invalidate(); holdTimer = nil
         dragScrollTimer?.invalidate();dragScrollTimer=nil;lastDragEvent=nil
         let p = convert(event.locationInWindow,from:nil)
-        if !panning { updateDrag(at:p) }
+        if !panning {
+            if hitID != nil && edge == nil && !isClipLifted && !flags.contains([.option,.shift]) { session.seek(time(p)) }
+            else { updateDrag(at:p) }
+        }
         if let result = dragPreview { session.change { $0 = result } }
         hitID = nil; box = nil; dragBase = nil; dragPreview = nil; snapGuide = nil; panning = false
-        needsDisplay = true
+        isClipLifted = false; isScrubbing = false
+        NSCursor.arrow.set()
+        refreshMotionTargets()
     }
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let session, !session.busy else { return nil }

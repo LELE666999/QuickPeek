@@ -7,7 +7,7 @@ pkg=root/'QuickPeek/Packages/QuickPeekTimeline'
 subprocess.run(['swift','build','--package-path',str(pkg)],check=True)
 build=pkg/'.build/arm64-apple-macosx/debug'
 source=(root/'QuickPeek/QuickPeek/TimelineEditorView.swift').read_text()
-source=source.replace('Library/Logs/QuickPeek/editor-errors.log','Library/Logs/QuickPeek/tests/editor-errors.log').replace('private func continueEdgeScroll()', 'fileprivate func continueEdgeScroll()').replace('private var dragPreview:', 'fileprivate var dragPreview:').replace('_session = State(initialValue: TimelineEditorSession(url: fileURL))', '_session = State(initialValue: NativeSnapshotSession.shared!)').replace('.task { await session.load() }', '')
+source=source.replace('Library/Logs/QuickPeek/editor-errors.log','Library/Logs/QuickPeek/tests/editor-errors.log').replace('private func continueEdgeScroll()', 'fileprivate func continueEdgeScroll()').replace('private var dragPreview:', 'fileprivate var dragPreview:').replace('private var isClipLifted', 'fileprivate var isClipLifted').replace('private var displayRects:', 'fileprivate var displayRects:').replace('_session = State(initialValue: TimelineEditorSession(url: fileURL))', '_session = State(initialValue: NativeSnapshotSession.shared!)').replace('.task { await session.load() }', '')
 source+='''
 @MainActor enum NativeSnapshotSession { static var shared: TimelineEditorSession? }
 @MainActor final class TapSharedState {
@@ -80,8 +80,43 @@ struct StableVideoPlayer: View {
         reorder.edits.split(at:2);reorder.edits.split(at:4)
         canvas.session=reorder;scroll.resizeCanvas()
         let beforeOrder=reorder.edits.state.timeline.tracks[0].segments.map { $0.id }
+        func saveDragFrame(_ name:String) {
+            if let bitmap=canvas.bitmapImageRepForCachingDisplay(in:canvas.visibleRect) {
+                canvas.cacheDisplay(in:canvas.visibleRect,to:bitmap)
+                try? bitmap.representation(using:.png,properties:[:])?.write(to:URL(fileURLWithPath:"/tmp/quickpeek-"+name+".png"))
+            }
+        }
+        // Quick click seeks, but does not lift or alter the timeline.
+        let originalState=reorder.edits.state
+        reorder.seek(0)
         canvas.mouseDown(with:mouse(.leftMouseDown,16+canvas.scale,60))
+        precondition(!canvas.isClipLifted && abs(reorder.position)<0.001)
+        canvas.mouseUp(with:mouse(.leftMouseUp,16+canvas.scale,60))
+        precondition(abs(reorder.position-1)<0.001)
+        precondition(reorder.edits.state.timeline == originalState.timeline)
+        // Moving before the hold threshold scrubs instead of reordering.
+        canvas.mouseDown(with:mouse(.leftMouseDown,16+canvas.scale,60))
+        canvas.mouseDragged(with:mouse(.leftMouseDragged,16+5*canvas.scale,60))
+        RunLoop.main.run(until:Date().addingTimeInterval(0.35))
+        precondition(!canvas.isClipLifted && canvas.dragPreview == nil)
+        canvas.mouseUp(with:mouse(.leftMouseUp,16+5*canvas.scale,60))
+        precondition(reorder.edits.state.timeline == originalState.timeline)
+        // Holding lifts the clip without moving the playhead.
+        let playhead=reorder.position
+        canvas.mouseDown(with:mouse(.leftMouseDown,16+canvas.scale,60))
+        RunLoop.main.run(until:Date().addingTimeInterval(0.4))
+        precondition(canvas.isClipLifted && reorder.position == playhead)
+        saveDragFrame("longpress-lift")
+        let lifted=canvas.displayRects[beforeOrder[0]]!
+        precondition(lifted.height > 62 && lifted.minY < 34)
         canvas.mouseDragged(with:mouse(.leftMouseDragged,16+5.8*canvas.scale,60))
+        // Neighbor does not teleport to its destination on the same event.
+        let neighborStartX=canvas.displayRects[beforeOrder[1]]!.minX
+        RunLoop.main.run(until:Date().addingTimeInterval(0.04))
+        let intermediateX=canvas.displayRects[beforeOrder[1]]!.minX
+        precondition(intermediateX < neighborStartX && intermediateX > 16)
+        saveDragFrame("longpress-moving")
+
         precondition(canvas.dragPreview!.state.timeline.tracks[0].segments.map { $0.sourceRange!.start } == [2,4,0])
         precondition(reorder.edits.state.timeline.tracks[0].segments.map { $0.id } == beforeOrder)
         canvas.mouseUp(with:mouse(.leftMouseUp,16+5.8*canvas.scale,60))
@@ -90,6 +125,16 @@ struct StableVideoPlayer: View {
             precondition(track.segments.map { $0.targetRange.start } == [0,2,4])
         }
         reorder.edits.undo()
+        precondition(reorder.edits.state.timeline.tracks[0].segments.map { $0.id } == beforeOrder)
+        canvas.mouseDown(with:mouse(.leftMouseDown,16+canvas.scale,60))
+        RunLoop.main.run(until:Date().addingTimeInterval(0.35))
+        precondition(canvas.isClipLifted)
+        key("",[],53)
+        precondition(!canvas.isClipLifted && canvas.dragPreview == nil)
+        let cancelledState=reorder.edits.state
+        canvas.mouseDragged(with:mouse(.leftMouseDragged,16+5.8*canvas.scale,130))
+        precondition(reorder.edits.state == cancelledState)
+        canvas.mouseUp(with:mouse(.leftMouseUp,16+5.8*canvas.scale,60))
         precondition(reorder.edits.state.timeline.tracks[0].segments.map { $0.id } == beforeOrder)
         reorder.cleanup()
         // A dragging clip must visibly move before mouse-up, then snap exactly to its neighbor.
