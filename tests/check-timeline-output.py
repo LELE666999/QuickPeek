@@ -18,3 +18,10 @@ def rms(t):
 active=rms(.3);silent=rms(1.3);resumed=rms(2.3)
 assert active>0.01 and silent<0.001 and resumed>0.01,(active,silent,resumed)
 print(f'PASS: detached audio silence only at deleted interval: {active:.5f}, {silent:.5f}, {resumed:.5f}')
+
+for output,source in [(0.5,2.5),(2.5,4.5),(4.5,0.5)]:
+    a=frame('timeline-reordered.mp4',output);b=frame('source.mp4',source)
+    assert len(a)==len(b) and len(a)>0
+    error=sum(abs(x-y) for x,y in zip(a,b))/len(a)
+    assert error<12,(output,source,error)
+    print(f'PASS: reordered output {output:.1f}s matches source {source:.1f}s (mean pixel error {error:.2f})')

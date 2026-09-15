@@ -220,7 +220,7 @@ struct TimelineEditorView: View {
                 Spacer()
                 Button { help.toggle() } label: { Image(systemName: "questionmark.circle") }
                     .popover(isPresented: $help) {
-                        Text("点击时间线定位，⌘B / Control-B 分割。\n⌘点击多选，Shift 点击连续选择，空白处拖动框选。\n拖动片段实时移动、靠近边缘自动吸附。\n拖动两端裁剪并衔接；Option 拖动平移时间轴。\n音画默认关联；右键可解除关联，分别编辑。\nDelete 删除，⌘Z 撤销，⇧⌘Z 重做。\n解除关联的片段删除后保留空隙，避免其他轨道错位。\n\n时间线数据基础：TimelineKitCore · MIT\nCopyright © 2026 Ivan Yang\n完整许可见应用内 ThirdPartyNotices.txt")
+                        Text("点击时间线定位，⌘B / Control-B 分割。\n⌘点击多选，Shift 点击连续选择，空白处拖动框选。\n拖动片段调整前后顺序，松手自动接拢。\nOption-Shift 拖动自由移动，靠近边缘自动吸附。\n拖动两端裁剪并衔接；Option 拖动平移时间轴。\n音画默认关联；右键可解除关联，分别编辑。\nDelete 删除，⌘Z 撤销，⇧⌘Z 重做。\n解除关联的片段删除后保留空隙，避免其他轨道错位。\n\n时间线数据基础：TimelineKitCore · MIT\nCopyright © 2026 Ivan Yang\n完整许可见应用内 ThirdPartyNotices.txt")
                             .font(.system(size: 13)).padding(20).frame(width: 430)
                     }
                 Button(session.busy ? "导出中…" : "导出副本") { session.export() }
@@ -468,7 +468,7 @@ private final class EditTimelineCanvas: NSView {
         originalSelection = session.edits.state.selection
         hitID = nil; edge = nil; box = nil; anchorRange = nil
         dragBase = nil; dragPreview = nil; snapGuide = nil
-        panning = flags.contains(.option)
+        panning = flags.contains(.option) && !flags.contains(.shift)
         if panning { return }
         session.player.pause(); session.seek(time(down))
         if let (clip,t) = hit(down) {
@@ -477,7 +477,10 @@ private final class EditTimelineCanvas: NSView {
             if r.width > 24 && down.x < r.minX+7 { edge = .start }
             else if r.width > 24 && down.x > r.maxX-7 { edge = .end }
             if edge != nil { session.edits.select(clip.id) }
-            else if !session.edits.state.selection.contains(clip.id) || flags.contains(.command) || flags.contains(.shift) { session.select(clip.id,flags:flags) }
+            else if flags.contains([.option, .shift]) {
+                if !session.edits.state.selection.contains(clip.id) { session.edits.select(clip.id) }
+            }
+            else if !session.edits.state.selection.contains(clip.id) || flags.contains(.command) || (flags.contains(.shift) && !flags.contains(.option)) { session.select(clip.id,flags:flags) }
         } else if down.y > 30 && !flags.contains(.command) { session.edits.selectMany([]) }
         if hitID != nil { dragBase = session.edits }
         needsDisplay = true
@@ -496,6 +499,8 @@ private final class EditTimelineCanvas: NSView {
                 target = nearest; snapGuide = nearest
             }
             preview.trimSelected(edge:edge,to:target,ripple:session.ripple && !base.hasDetachedSelection)
+        } else if !flags.contains([.option, .shift]), let hitID {
+            snapGuide = preview.reorderSelection(draggedID:hitID,to:time(point))
         } else {
             let delta = base.magneticMoveDelta(by:proposed,tolerance:10/scale)
             preview.moveSelection(by:delta,snapToFrame:false)

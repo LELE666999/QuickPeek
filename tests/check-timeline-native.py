@@ -74,6 +74,24 @@ struct StableVideoPlayer: View {
             canvas.cacheDisplay(in:canvas.bounds,to:bitmap)
             try bitmap.representation(using:.png,properties:[:])!.write(to:URL(fileURLWithPath:"/tmp/quickpeek-timeline-native.png"))
         }
+        // Normal body dragging inserts the linked clip at a new position.
+        let reorder=TimelineEditorSession(url:session.url)
+        reorder.ready=true;reorder.edits=TimelineEdits(duration:6,fps:30,hasAudio:true);reorder.fitTimeline()
+        reorder.edits.split(at:2);reorder.edits.split(at:4)
+        canvas.session=reorder;scroll.resizeCanvas()
+        let beforeOrder=reorder.edits.state.timeline.tracks[0].segments.map { $0.id }
+        canvas.mouseDown(with:mouse(.leftMouseDown,16+canvas.scale,60))
+        canvas.mouseDragged(with:mouse(.leftMouseDragged,16+5.8*canvas.scale,60))
+        precondition(canvas.dragPreview!.state.timeline.tracks[0].segments.map { $0.sourceRange!.start } == [2,4,0])
+        precondition(reorder.edits.state.timeline.tracks[0].segments.map { $0.id } == beforeOrder)
+        canvas.mouseUp(with:mouse(.leftMouseUp,16+5.8*canvas.scale,60))
+        for track in reorder.edits.state.timeline.tracks {
+            precondition(track.segments.map { $0.sourceRange!.start } == [2,4,0])
+            precondition(track.segments.map { $0.targetRange.start } == [0,2,4])
+        }
+        reorder.edits.undo()
+        precondition(reorder.edits.state.timeline.tracks[0].segments.map { $0.id } == beforeOrder)
+        reorder.cleanup()
         // A dragging clip must visibly move before mouse-up, then snap exactly to its neighbor.
         let magnetic=TimelineEditorSession(url:session.url)
         magnetic.ready=true;magnetic.edits=TimelineEdits(duration:6,fps:30,hasAudio:true);magnetic.fitTimeline()
@@ -82,7 +100,7 @@ struct StableVideoPlayer: View {
         magnetic.edits.select(moving);magnetic.edits.trimSelected(edge:.start,to:2.2)
         canvas.session=magnetic;scroll.resizeCanvas()
         let startX=16+3*canvas.scale
-        canvas.mouseDown(with:mouse(.leftMouseDown,startX,60))
+        canvas.mouseDown(with:mouse(.leftMouseDown,startX,60,[.option,.shift]))
         canvas.mouseDragged(with:mouse(.leftMouseDragged,startX-0.17*canvas.scale,60))
         precondition(abs(canvas.dragPreview!.state.timeline.tracks[0].segments[1].targetRange.start-2)<0.001)
         precondition(abs(magnetic.edits.state.timeline.tracks[0].segments[1].targetRange.start-2.2)<0.001)
@@ -91,7 +109,7 @@ struct StableVideoPlayer: View {
         magnetic.edits.undo()
         precondition(abs(magnetic.edits.state.timeline.tracks[0].segments[1].targetRange.start-2.2)<0.001)
         let unchanged=magnetic.edits.state
-        canvas.mouseDown(with:mouse(.leftMouseDown,startX,60))
+        canvas.mouseDown(with:mouse(.leftMouseDown,startX,60,[.option,.shift]))
         canvas.mouseDragged(with:mouse(.leftMouseDragged,startX+canvas.scale,60))
         canvas.mouseDragged(with:mouse(.leftMouseDragged,startX,60))
         canvas.mouseUp(with:mouse(.leftMouseUp,startX,60))
@@ -102,7 +120,7 @@ struct StableVideoPlayer: View {
         precondition(scroll.contentView.bounds.origin.x>90,"Option drag must pan the timeline")
         canvas.mouseUp(with:mouse(.leftMouseUp,300,60,.option))
         scroll.contentView.scroll(to:.zero)
-        canvas.mouseDown(with:mouse(.leftMouseDown,startX,60))
+        canvas.mouseDown(with:mouse(.leftMouseDown,startX,60,[.option,.shift]))
         canvas.mouseDragged(with:mouse(.leftMouseDragged,scroll.contentSize.width-10,60))
         canvas.continueEdgeScroll()
         precondition(scroll.contentView.bounds.origin.x>0,"Edge dragging must scroll even without another pointer event")

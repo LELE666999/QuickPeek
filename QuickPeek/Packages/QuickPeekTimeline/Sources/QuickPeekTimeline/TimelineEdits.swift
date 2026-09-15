@@ -195,6 +195,44 @@ public struct TimelineEdits: Sendable {
         return ordered.first(where: { legal($0) }) ?? 0
     }
 
+    /// Insert selected clips as a block. Linked partners receive the exact same
+    /// displacement; detached lanes remain unchanged. Invalid overlaps are atomic no-ops.
+    @discardableResult
+    public mutating func reorderSelection(draggedID: UUID, to time: Double) -> Double? {
+        guard time.isFinite, state.selection.contains(draggedID),
+              let lane = state.timeline.tracks.first(where: { $0.segments.contains { $0.id == draggedID } }),
+              !lane.isLocked else { return nil }
+        let ordered = lane.segments.sorted { $0.targetRange.start < $1.targetRange.start }
+        let moving = ordered.filter { state.selection.contains($0.id) }
+        let remaining = ordered.filter { !state.selection.contains($0.id) }
+        guard !moving.isEmpty else { return nil }
+        let slot = remaining.firstIndex { time < $0.targetRange.start + $0.targetRange.duration / 2 } ?? remaining.count
+        let reordered = Array(remaining.prefix(slot)) + moving + Array(remaining.dropFirst(slot))
+        var next = state
+        var shifts: [UUID: Double] = [:]
+        var cursor = ordered.first?.targetRange.start ?? 0
+        var insertion = cursor
+        for clip in reordered {
+            if clip.id == moving[0].id { insertion = cursor }
+            let delta = cursor - clip.targetRange.start
+            for id in expanded([clip.id]) { shifts[id] = delta }
+            cursor += clip.targetRange.duration
+        }
+        for t in next.timeline.tracks.indices {
+            for c in next.timeline.tracks[t].segments.indices {
+                let id = next.timeline.tracks[t].segments[c].id
+                if let delta = shifts[id] {
+                    if next.timeline.tracks[t].isLocked && abs(delta) > 0.00001 { return nil }
+                    next.timeline.tracks[t].segments[c].targetRange.start += delta
+                }
+            }
+            next.timeline.tracks[t].segments.sort { $0.targetRange.start < $1.targetRange.start }
+        }
+        guard valid(next) else { return nil }
+        commit(next)
+        return insertion
+    }
+
     public mutating func moveSelection(by delta: Double, snapToFrame: Bool = true) {
         var next = state
         for t in next.timeline.tracks.indices {
