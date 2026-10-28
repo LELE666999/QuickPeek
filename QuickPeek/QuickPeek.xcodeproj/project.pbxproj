@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+ D03000000000000000000002 = {isa = PBXBuildFile; fileRef = D03000000000000000000001; };
+ D0200000000000000000000A = {isa = PBXBuildFile; fileRef = D02000000000000000000009; };
+ D02000000000000000000008 = {isa = PBXBuildFile; fileRef = D02000000000000000000007; };
+ D02000000000000000000006 = {isa = PBXBuildFile; fileRef = D02000000000000000000005; };
+ D02000000000000000000004 = {isa = PBXBuildFile; fileRef = D02000000000000000000003; };
+ D02000000000000000000002 = {isa = PBXBuildFile; fileRef = D02000000000000000000001; };
+ F01000000000000000000001 = {isa = PBXBuildFile; fileRef = F01000000000000000000002; };
+ F01000000000000000000003 = {isa = PBXBuildFile; fileRef = F01000000000000000000004; };
  T10000000000000000000009 = {isa = PBXBuildFile; fileRef = T1000000000000000000000A; };
  T10000000000000000000001 = {isa = PBXBuildFile; fileRef = T10000000000000000000002; };
  T10000000000000000000003 = {isa = PBXBuildFile; productRef = T10000000000000000000004; };
@@ -38,6 +46,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXFileReference section */
+ D03000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassControls.swift; sourceTree = "<group>"; };
+ D02000000000000000000009 = {isa = PBXFileReference; lastKnownFileType = folder; path = PDFCompatibility; sourceTree = "<group>"; };
+ D02000000000000000000007 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentAI.swift; sourceTree = "<group>"; };
+ D02000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFCompatibility.swift; sourceTree = "<group>"; };
+ D02000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentExport.swift; sourceTree = "<group>"; };
+ D02000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFWorkspace.swift; sourceTree = "<group>"; };
+ F01000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontPreview.swift; sourceTree = "<group>"; };
+ F01000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = font_subset.py; sourceTree = "<group>"; };
  T1000000000000000000000A = {isa = PBXFileReference; lastKnownFileType = text; path = ThirdPartyNotices.txt; sourceTree = "<group>"; };
  T10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineEditorView.swift; sourceTree = "<group>"; };
 		06BEE9F070BF4915EEED7B07 /* Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings.swift; sourceTree = "<group>"; };
@@ -65,6 +81,12 @@
 		BFD797BF1399A3038CCA175E /* QuickPeek */ = {
 			isa = PBXGroup;
 			children = (
+ D03000000000000000000001,
+ D02000000000000000000009,
+ D02000000000000000000007,
+ D02000000000000000000005,
+ D02000000000000000000003,
+ D02000000000000000000001,
 				F5F30026F806AA10776E2F26 /* AppDelegate.swift */,
 				FB39632E93A3BF0C71DA2FD1 /* Assets.xcassets */,
 				96B2912A7746E28AB31B6848 /* ImageCropView.swift */,
@@ -76,6 +98,8 @@
 				377554C6998980E251B16147 /* SettingsView.swift */,
 				8A1532C53277DA091E608054 /* VideoTrimView.swift */,
  T10000000000000000000002,
+ F01000000000000000000002,
+ F01000000000000000000004,
  T1000000000000000000000A,
 			);
 			path = QuickPeek;
@@ -160,8 +184,10 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+ D0200000000000000000000A,
 				1D4413D1344EADD64D1B477E /* Assets.xcassets in Resources */,
  T10000000000000000000009,
+ F01000000000000000000003,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -172,6 +198,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+ D03000000000000000000002,
+ D02000000000000000000008,
+ D02000000000000000000006,
+ D02000000000000000000004,
+ D02000000000000000000002,
 				F3665F8C0FE9E4380262EA38 /* AppDelegate.swift in Sources */,
 				5D9B14EC36E5342821331E05 /* ImageCropView.swift in Sources */,
 				594359BE71AA56A65C6D9802 /* PreviewWindow.swift in Sources */,
@@ -180,6 +211,7 @@
 				ABEE4D801E19D75D6F8F6BBE /* SettingsView.swift in Sources */,
 				4BC9F190D9289E3104C54007 /* VideoTrimView.swift in Sources */,
  T10000000000000000000001,
+ F01000000000000000000001,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

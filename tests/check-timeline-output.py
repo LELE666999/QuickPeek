@@ -25,3 +25,13 @@ for output,source in [(0.5,2.5),(2.5,4.5),(4.5,0.5)]:
     error=sum(abs(x-y) for x,y in zip(a,b))/len(a)
     assert error<12,(output,source,error)
     print(f'PASS: reordered output {output:.1f}s matches source {source:.1f}s (mean pixel error {error:.2f})')
+
+# A context export must contain the middle segment, not the full multiselection.
+clip=p/'clip-exports/clip.mp4'
+if clip.exists():
+    for output,source in [(0.1,2.1),(1.5,3.5)]:
+        a=frame('clip-exports/clip.mp4',output);b=frame('source.mp4',source)
+        assert len(a)==len(b) and len(a)>0
+        error=sum(abs(x-y) for x,y in zip(a,b))/len(a)
+        assert error<12,(output,source,error)
+        print(f'PASS: context clip {output:.1f}s matches source {source:.1f}s (mean pixel error {error:.2f})')

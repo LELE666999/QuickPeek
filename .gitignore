@@ -26,3 +26,6 @@ build/
 # Python test caches
 __pycache__/
 *.py[cod]
+
+# Locally rendered promotional media
+/产品介绍视频/

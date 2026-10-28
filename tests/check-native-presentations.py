@@ -1,9 +1,13 @@
 from pathlib import Path
-import subprocess,tempfile
+import subprocess,tempfile,os,sys
 root=Path(__file__).resolve().parents[1]
+fixture = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('QP_PPT_FIXTURE')
+if not fixture: raise SystemExit('Provide a seven-slide PPTX: python3 tests/check-native-presentations.py /path/to/seven-slides.pptx (or set QP_PPT_FIXTURE)')
+fixture=Path(fixture).expanduser().resolve()
+if not fixture.is_file(): raise SystemExit(f'Presentation fixture not found: {fixture}')
 s=(root/'QuickPeek/QuickPeek/PreviewWindow.swift').read_text()
 renderer=s[s.index('@MainActor\nfinal class NativePresentationRenderer'):s.index('private func exportPageImage')]
-runner=s[s.index('private func runProcess('):s.index('struct PDFDocumentBrowserView:')]
+runner=s[s.index('private func runProcess('):s.index('private struct PDFThumbnailCell:')]
 test=r'''
 @main struct Test {
  @MainActor static func main() async throws {
@@ -29,4 +33,4 @@ with tempfile.TemporaryDirectory() as d:
  p=Path(d)/'test.swift';p.write_text('import AppKit\nimport WebKit\nimport PDFKit\n'+renderer+runner+test)
  exe=Path(d)/'test'
  subprocess.run(['swiftc','-parse-as-library',str(p),'-o',str(exe)],check=True)
- subprocess.run([str(exe),'/Users/lele/Downloads/presentation.pptx'],check=True,timeout=90)
+ subprocess.run([str(exe),str(fixture)],check=True,timeout=90)

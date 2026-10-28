@@ -26,7 +26,7 @@
 
 安装二进制 SHA-256 与构建结果一致：`e9968490cb371fce1b9d88d464fea27c6b68e381b888cbc80b4b483b5c3b6084`。
 
-旧版备份：`/Users/lele/Desktop/自己开发的app/空格预览工具/build/app-backups/20260909-125927/QuickPeek.app`。
+旧版备份：`build/app-backups/20260909-125927/QuickPeek.app`。
 
 ## 2026-09-09 磁吸与时间轴优化
 - 拖动使用独立预览快照，画面中的片段实时跟随；松手提交一次撤销事务，拖回原位取消移动。
@@ -37,7 +37,7 @@
 - 预览圆角 16pt、左右留白 16pt、上下留白 12pt；860pt 窗口离屏布局已检查。
 - 独立审查发现的拖回原位与恢复裁剪边界问题均已修复并补回归。
 
-磁吸版本已构建、验证签名、替换并启动：{"installed": "/Applications/QuickPeek.app", "backup": "/Users/lele/Desktop/自己开发的app/空格预览工具/build/app-backups/20260909-131334/QuickPeek.app", "sha256": "a9f42669cf2bcca4e610cd2530a1b562441f58e9a51bbe0326cbb74bb0908599", "process": "3273 /Applications/QuickPeek.app/Contents/MacOS/QuickPeek", "timestamp": "20260909-131334"}
+磁吸版本已构建、验证签名、替换并启动：{"installed": "/Applications/QuickPeek.app", "backup": "build/app-backups/20260909-131334/QuickPeek.app", "sha256": "a9f42669cf2bcca4e610cd2530a1b562441f58e9a51bbe0326cbb74bb0908599", "process": "3273 /Applications/QuickPeek.app/Contents/MacOS/QuickPeek", "timestamp": "20260909-131334"}
 
 ## 导出错误与保存窗口更新（已编译，待替换）
 保存窗口默认源目录并作为预览的 sheet 明确选择；错误按阶段显示中文标题、错误码和可复制详情，保留本地诊断及导出项目快照。当前选中录屏五种实际导出成功，截图中的中止未复现，不能断言已修复根因。
@@ -46,7 +46,7 @@
 ## PPT 内嵌分页与直接捏合更新
 PPT 通过 macOS qlmanage 输出 Quick Look HTML，再由应用内 WebKit 按页面生成静态预览；原 Keynote/LibreOffice 转换调用已移除。PresentationPreview 使用逐页缩略图浏览器，按文件 URL 管理视图生命周期，SwiftUI task 取消时终止后台生成及 WebKit 等待。已验证 7 页实际 PPT 页数与独立页面渲染，临时文件路径规范化避免 WebKit 文件访问失败。
 手势增加 NSEvent.magnify 本地事件路由，先于原生视频/文档子视图处理；识别器排除同一事件避免双倍缩放。Command 滚动、双轴平移、默认翻页、点击穿透与原生视频控件回归通过。未进行真实触控板端到端操作，测试覆盖事件路由。PPT 为静态页，不播放演示动画。
-已替换并启动，包含此前待安装的导出目录与错误诊断改进：{"status": "installed", "backup": "/Users/lele/Desktop/自己开发的app/空格预览工具/build/app-backups/20260909-182133/QuickPeek.app", "sha256": "e6c670a515e6d142ee53eb31076fb8f32294728502f1777104cd4c6d8c9c16b1", "process": "84180 /Applications/QuickPeek.app/Contents/MacOS/QuickPeek"}
+已替换并启动，包含此前待安装的导出目录与错误诊断改进：{"status": "installed", "backup": "build/app-backups/20260909-182133/QuickPeek.app", "sha256": "e6c670a515e6d142ee53eb31076fb8f32294728502f1777104cd4c6d8c9c16b1", "process": "84180 /Applications/QuickPeek.app/Contents/MacOS/QuickPeek"}
 
 ## 2026-09-09 连续 PPT 与捏合事件修正
 

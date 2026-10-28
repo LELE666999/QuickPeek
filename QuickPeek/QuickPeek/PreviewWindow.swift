@@ -5,6 +5,7 @@ import ImageIO
 import PDFKit
 import AVFoundation
 import AVKit
+import QuickPeekTimeline
 import Quartz
 import QuickLookThumbnailing
 import WebKit
@@ -316,93 +317,6 @@ private struct SaveStatus: Identifiable, Equatable {
 }
 
 @MainActor
-final class PDFDocumentController: ObservableObject {
-    @Published var document: PDFDocument?
-    @Published var currentPageIndex = 0
-    @Published var pageImages: [NSImage] = []
-    @Published var isRendering = false
-
-    let fileURL: URL
-
-    init(fileURL: URL) {
-        self.fileURL = fileURL
-        self.document = PDFDocument(url: fileURL)
-        Task { await renderPages() }
-    }
-
-    var pageCount: Int { document?.pageCount ?? 0 }
-
-    func setCurrentPage(_ index: Int) {
-        guard pageImages.indices.contains(index) else { return }
-        currentPageIndex = index
-    }
-
-    private func renderPages() async {
-        guard document != nil else {
-            pageImages = []
-            return
-        }
-        isRendering = true
-        let fileURL = self.fileURL
-        let currentIndex = currentPageIndex
-        let rendered = await Task.detached(priority: .userInitiated) { () -> [NSImage] in
-            guard let document = PDFDocument(url: fileURL) else { return [] }
-            var rendered: [NSImage] = []
-            rendered.reserveCapacity(document.pageCount)
-
-            for index in 0..<document.pageCount {
-                guard let page = document.page(at: index) else { continue }
-                let bounds = page.bounds(for: .mediaBox)
-                let aspectRatio = max(bounds.height / max(bounds.width, 1), 1)
-                let targetWidth: CGFloat = 1200
-                let targetSize = CGSize(
-                    width: targetWidth,
-                    height: max(1600, targetWidth * aspectRatio)
-                )
-                rendered.append(page.thumbnail(of: targetSize, for: .mediaBox))
-            }
-            return rendered
-        }.value
-        pageImages = rendered
-        currentPageIndex = min(currentIndex, max(0, rendered.count - 1))
-        isRendering = false
-    }
-
-    func copyCurrentPage() {
-        guard pageImages.indices.contains(currentPageIndex) else { return }
-        let image = pageImages[currentPageIndex]
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([image])
-    }
-
-    func copyDocument() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([fileURL as NSURL])
-    }
-
-    func copyPage(at index: Int) {
-        guard pageImages.indices.contains(index) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([pageImages[index]])
-    }
-
-    func exportPage(at index: Int) {
-        guard pageImages.indices.contains(index) else { return }
-        exportPageImage(pageImages[index], sourceURL: fileURL, pageIndex: index)
-    }
-
-    func deleteCurrentPage() {
-        guard let document, document.pageCount > 1 else { return }
-        document.removePage(at: currentPageIndex)
-        document.write(to: fileURL)
-        self.document = PDFDocument(url: fileURL)
-        Task { await renderPages() }
-        let newIndex = min(currentPageIndex, max(0, document.pageCount - 1))
-        currentPageIndex = newIndex
-    }
-}
-
-@MainActor
 final class PresentationDocumentController: ObservableObject {
     @Published var currentPageIndex = 0
     @Published var pageImages: [NSImage] = []
@@ -608,139 +522,6 @@ private func runProcess(executableURL: URL, arguments: [String], timeout: TimeIn
         return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     } catch {
         return (1, error.localizedDescription)
-    }
-}
-
-struct PDFDocumentBrowserView: View {
-    @ObservedObject var controller: PDFDocumentController
-
-    var body: some View {
-        HStack(spacing: 12) {
-            thumbnailRail
-                .frame(width: 132)
-
-            ZoomableView(passesClicksThrough: true) {
-                pageCanvas
-            }
-            .environment(\.previewNavigation, nil)
-        }
-    }
-
-    private var thumbnailRail: some View {
-        ScrollView {
-            Group {
-                if controller.pageImages.isEmpty && controller.isRendering {
-                    VStack(spacing: 10) {
-                        ProgressView()
-                        Text("正在加载页面…")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.72))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 20)
-                } else {
-                    LazyVStack(spacing: 10) {
-                        ForEach(Array(controller.pageImages.enumerated()), id: \.offset) { index, image in
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    controller.setCurrentPage(index)
-                                }
-                            } label: {
-                                PDFThumbnailCell(image: image, index: index, isCurrentPage: index == controller.currentPageIndex)
-                            }
-                            .contextMenu {
-                                Button("复制这一页") {
-                                    controller.copyPage(at: index)
-                                }
-                                Button("导出这一页 PNG…") {
-                                    controller.exportPage(at: index)
-                                }
-                                Divider()
-                                Button("复制原文件") {
-                                    controller.copyDocument()
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-            .padding(10)
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.black.opacity(0.16))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(.white.opacity(0.08), lineWidth: 1)
-                }
-        )
-    }
-
-    private var pageCanvas: some View {
-        GeometryReader { geo in
-            let contentWidth = max(320, min(geo.size.width - 28, 980))
-
-            ScrollViewReader { proxy in
-                Group {
-                    if controller.pageImages.isEmpty && controller.isRendering {
-                        VStack(spacing: 12) {
-                            ProgressView()
-                                .controlSize(.large)
-                            Text("PDF 页面加载中…")
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        ScrollView(.vertical) {
-                            LazyVStack(spacing: 18) {
-                                ForEach(Array(controller.pageImages.enumerated()), id: \.offset) { index, image in
-                                    Image(nsImage: image)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fit)
-                                        .frame(maxWidth: contentWidth)
-                                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                        .overlay {
-                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                .stroke(.white.opacity(0.14), lineWidth: 1)
-                                        }
-                                        .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
-                                        .contextMenu {
-                                            Button("复制这一页") {
-                                                controller.copyPage(at: index)
-                                            }
-                                            Button("导出这一页 PNG…") {
-                                                controller.exportPage(at: index)
-                                            }
-                                            Divider()
-                                            Button("复制原文件") {
-                                                controller.copyDocument()
-                                            }
-                                        }
-                                        .id(index)
-                                }
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(12)
-                        }
-                        .onChange(of: controller.currentPageIndex) { _, newValue in
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                proxy.scrollTo(newValue, anchor: .top)
-                            }
-                        }
-                    }
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.black.opacity(0.12))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(.white.opacity(0.06), lineWidth: 1)
-                        }
-                )
-            }
-        }
     }
 }
 
@@ -1577,11 +1358,14 @@ final class FFmpegSupport {
 
     private static func run(ffmpegURL: URL, arguments: [String], timeout: TimeInterval = 3) -> String {
         let process = Process()
-        let pipe = Pipe()
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("ffmpeg-probe-"+UUID().uuidString)
+        FileManager.default.createFile(atPath:log.path,contents:nil)
+        guard let handle = try? FileHandle(forWritingTo:log) else { return "" }
+        defer { try? handle.close(); try? FileManager.default.removeItem(at:log) }
         process.executableURL = ffmpegURL
         process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
+        process.standardOutput = handle
+        process.standardError = handle
 
         do {
             try process.run()
@@ -1597,7 +1381,8 @@ final class FFmpegSupport {
                 return ""
             }
 
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard process.terminationStatus == 0 else { return "" }
+            let data = (try? Data(contentsOf:log)) ?? Data()
             return String(data: data, encoding: .utf8) ?? ""
         } catch {
             return ""
@@ -3384,7 +3169,9 @@ private struct SelectionPreviewTile: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         case .other:
-            if let image = previewImage {
+            if ["ttf","otf","ttc","otc","dfont"].contains(fileURL.pathExtension.lowercased()) {
+                FontSpecimenView(url:fileURL).id(fileURL)
+            } else if let image = previewImage {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -3425,6 +3212,7 @@ private struct SelectionPreviewTile: View {
             return
         }
 
+        if ["ttf","otf","ttc","otc","dfont"].contains(ext) { fileCategory = .other; return }
         let webExts: Set<String> = ["html","htm","xhtml","shtml"]
         let svgExts: Set<String> = ["svg"]
         let codeExts: Set<String> = ["swift","py","js","ts","jsx","tsx","java","kt","c","cpp","h","m","mm","rs","go","rb","php","css","scss","json","xml","yaml","yml","toml","md","txt","text","log","out","err","trace","dump","sh","bash","zsh","sql","r","lua","dart","vue","svelte","ini","cfg","conf","config","properties","env","editorconfig","gitconfig"]
@@ -3894,9 +3682,8 @@ struct PreviewContentView: View {
                     imageUnderstandingMenu(compact: isCompact)
                 }
                 if fileCategory == .pdf {
-                    neutralToolButton("复制页", icon: "doc.on.doc", compact: isCompact) { pdfController.copyCurrentPage() }
-                    neutralToolButton("复制文件", icon: "square.on.square", compact: isCompact) { pdfController.copyDocument() }
-                    neutralToolButton("删当前页", icon: "trash", compact: isCompact) { pdfController.deleteCurrentPage() }
+                    neutralToolButton("文档", icon: "doc.richtext", compact: isCompact) { pdfController.showTools = true }
+                    neutralToolButton("AI 助手", icon: "sparkles", compact: isCompact) { pdfController.showAI = true }
                 }
                 if fileCategory == .media {
                     neutralToolButton("画面裁剪", icon: "crop", compact: isCompact) { showVideoCrop = true }
@@ -3912,26 +3699,13 @@ struct PreviewContentView: View {
                 } label: {
                     toolbarLabel(title: isPinned ? "已钉住" : "钉住", icon: isPinned ? "pin.fill" : "pin", compact: isCompact)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(fg)
-                .background {
-                    Capsule(style: .continuous)
-                        .fill(neutralCapsuleTint)
-                        .overlay {
-                            Capsule(style: .continuous)
-                                .stroke(isPinned ? Color.orange.opacity(0.55) : neutralCapsuleStroke, lineWidth: 1)
-                        }
-                }
-                .controlSize(.large)
+                .buttonStyle(QuickPeekGlassButtonStyle(selected: isPinned, height: 36, horizontalPadding: 0))
                 Button {
                     openFileWithConfiguredApp()
                 } label: {
                     toolbarLabel(title: openButtonLabel, icon: "arrow.up.forward.app", compact: isCompact)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .background(Color.accentColor, in: Capsule())
-                .controlSize(.large)
+                .buttonStyle(QuickPeekGlassButtonStyle(tone: .accent, height: 36, horizontalPadding: 0))
             }
     }
 
@@ -3972,31 +3746,38 @@ struct PreviewContentView: View {
     }
 
     private func neutralToolButton(_ t: String, icon: String, compact: Bool, a: @escaping () -> Void) -> some View {
-        Button(action: a) {
-            toolbarLabel(title: t, icon: icon, compact: compact)
-                .background {
-                    Capsule(style: .continuous)
-                        .fill(neutralCapsuleTint)
-                        .overlay {
-                            Capsule(style: .continuous).stroke(neutralCapsuleStroke, lineWidth: 1)
-                        }
-                }
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(fg)
-        .controlSize(.large)
+        Button(action: a) { toolbarLabel(title: t, icon: icon, compact: compact) }
+            .buttonStyle(QuickPeekGlassButtonStyle(height: 36, horizontalPadding: 0))
     }
 
     private func exportMenu() -> NSMenu {
         let menu = NSMenu()
+        if canSubsetFont {
+            menu.addItem(previewMenuItem("提取字体字符（英文 / 数字 / 符号）…") { exportFontSubset() })
+            return menu
+        }
         if canResizeExport {
             menu.addItem(previewMenuItem("修改尺寸并导出…") { exportResizedMedia() })
             menu.addItem(.separator())
         }
-        for format in availableExportFormats {
-            let item = previewMenuItem("导出 \(format.menuLabel)") { exportWithFFmpeg(target: format) }
-            item.isEnabled = !isConverting
-            menu.addItem(item)
+        if fileCategory == .media && !isAudioPreview {
+            let live = previewMenuItem("导出实况图…") { exportPreviewClip(.livePhoto) }
+            live.isEnabled = !isConverting; menu.addItem(live)
+            let harmony = previewMenuItem("导出鸿蒙动态照片（测试版）…") { exportPreviewClip(.harmonyPhoto) }
+            harmony.isEnabled = !isConverting; menu.addItem(harmony)
+            menu.addItem(.separator())
+        }
+        for group in ["图片 / 当前画面", "动图", "视频", "音频"] {
+            let formats = availableExportFormats.filter { $0.group == group }
+            guard !formats.isEmpty else { continue }
+            let submenu = NSMenu(); submenu.autoenablesItems = false
+            for format in formats {
+                let label = fileCategory == .media && group == "图片 / 当前画面" ? "保存\(isWebMFile ? "首帧" : "当前画面")为 \(format.menuLabel)…" : "导出 \(format.menuLabel)…"
+                let item = previewMenuItem(label) { exportWithFFmpeg(target:format) }
+                item.isEnabled = !isConverting; submenu.addItem(item)
+            }
+            let item = NSMenuItem(title:group,action:nil,keyEquivalent:"")
+            item.submenu = submenu; menu.addItem(item)
         }
         menu.autoenablesItems = false
         return menu
@@ -4012,6 +3793,10 @@ struct PreviewContentView: View {
     private func toolsMenu(compact: Bool) -> some View {
         neutralToolButton("工具", icon: "wrench.and.screwdriver", compact: compact) {
             let menu = NSMenu()
+            if canSubsetFont {
+                menu.addItem(previewMenuItem("提取字体字符…") { exportFontSubset() })
+                menu.addItem(.separator())
+            }
             menu.addItem(previewMenuItem("打印当前预览") { printCurrentPreview() })
             menu.addItem(previewMenuItem("AirDrop 分享") { shareViaAirDrop() })
             menu.addItem(previewMenuItem("系统分享…") { showSystemSharePicker() })
@@ -4205,7 +3990,9 @@ struct PreviewContentView: View {
                     .padding(14)
                 }
             case .other:
-                if let img = previewImage {
+                if isFontFile {
+                    FontSpecimenView(url:fileURL).id(fileURL)
+                } else if let img = previewImage {
                     stillImagePreview(img)
                 } else {
                     VStack(spacing: 10) {
@@ -4479,7 +4266,7 @@ struct PreviewContentView: View {
             }
 
             if !hasImageUnderstandingResults && recognitionStatusMessage.isEmpty {
-                Text(isSVGFile ? "这里可以直接对 SVG 做 OCR、取色、导出 PNG，或把识别到的文字一键翻译。" : "这里可以直接识别图片或当前 PDF 页里的文字、二维码，再一键复制、搜索或翻译。")
+                Text("选择工具，识别当前预览内容")
                     .font(.system(size: 11.5))
                     .foregroundStyle(fg2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -4522,19 +4309,12 @@ struct PreviewContentView: View {
             }
             .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .contentShape(Capsule())
-        .solidPanel(in: Capsule(), fill: secondaryFill, stroke: panelStroke, shadowOpacity: 0.02)
-        .menuStyle(.borderlessButton)
-        .buttonStyle(.plain)
+        .menuStyle(.button)
+        .buttonStyle(QuickPeekGlassButtonStyle(height: 38, horizontalPadding: 14))
     }
 
     private func sectionTitle(_ title: String) -> some View {
-        Text(title)
-            .font(.system(size: 11.5, weight: .semibold))
-            .foregroundStyle(fg2)
+        Text(title).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(fg2)
     }
 
     private func actionCapsuleButton(title: String, icon: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
@@ -4543,38 +4323,15 @@ struct PreviewContentView: View {
                 .font(.system(size: 11.5, weight: .semibold))
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(disabled ? fg2.opacity(0.7) : fg)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background {
-            Capsule(style: .continuous)
-                .fill(isDark ? Color.white.opacity(disabled ? 0.06 : 0.10) : Color.black.opacity(disabled ? 0.04 : 0.07))
-                .overlay {
-                    Capsule(style: .continuous)
-                        .stroke(disabled ? neutralCapsuleStroke.opacity(0.5) : neutralCapsuleStroke, lineWidth: 1)
-                }
-        }
+        .buttonStyle(QuickPeekGlassButtonStyle(height: 38, horizontalPadding: 10))
         .disabled(disabled)
     }
 
     private func inlineTextActionButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: icon)
-                .font(.system(size: 10.5, weight: .semibold))
+            Label(title, systemImage: icon).font(.system(size: 10.5, weight: .semibold))
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(fg)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background {
-            Capsule(style: .continuous)
-                .fill(neutralCapsuleTint)
-                .overlay {
-                    Capsule(style: .continuous)
-                        .stroke(neutralCapsuleStroke, lineWidth: 1)
-                }
-        }
+        .buttonStyle(QuickPeekGlassButtonStyle(height: 30, horizontalPadding: 10))
     }
 
     private var canUseImageUnderstanding: Bool {
@@ -4582,7 +4339,7 @@ struct PreviewContentView: View {
         case .image, .pdf:
             return fileCategory == .pdf || !isAnimatedImage
         case .other:
-            return previewImage != nil
+            return !isFontFile && previewImage != nil
         default:
             return false
         }
@@ -4617,8 +4374,10 @@ struct PreviewContentView: View {
         }
     }
 
+    private var isFontFile: Bool { ["ttf","otf","ttc","otc","dfont"].contains(fileURL.pathExtension.lowercased()) }
+    private var canSubsetFont: Bool { ["ttf","otf"].contains(fileURL.pathExtension.lowercased()) }
     private var canConvertPreview: Bool {
-        !availableExportFormats.isEmpty
+        canSubsetFont || !availableExportFormats.isEmpty
     }
 
     private var isWebMFile: Bool {
@@ -4635,48 +4394,27 @@ struct PreviewContentView: View {
         return ["png", "apng", "jpg", "jpeg", "jfif", "heic", "heif", "tif", "tiff", "gif", "webp"].contains(ext)
     }
 
+    private var isAudioPreview: Bool {
+        ["mp3","m4a","aac","wav","flac","aif","aiff","ogg","opus","wma","alac","caf"].contains(fileURL.pathExtension.lowercased())
+    }
     private var availableExportFormats: [ExportFormat] {
-        switch fileCategory {
-        case .media:
-            return ExportFormat.allCases.filter { format in
-                switch format {
-                case .png:
-                    return false
-                case .gif:
-                    return true
-                case .apng:
-                    return ffmpegSupport.supportsEncoder("apng")
-                case .mp4:
-                    return ffmpegSupport.supportsEncoder("libx264") && ffmpegSupport.supportsMuxer("mp4")
-                case .mov:
-                    return ffmpegSupport.supportsEncoder("libx264") && ffmpegSupport.supportsMuxer("mov")
-                case .webm:
-                    return ffmpegSupport.supportsEncoder("libvpx-vp9") && ffmpegSupport.supportsMuxer("webm")
-                case .mp3:
-                    return ffmpegSupport.supportsEncoder("libmp3lame") && ffmpegSupport.supportsMuxer("mp3")
-                case .wav:
-                    return ffmpegSupport.supportsMuxer("wav")
-                case .webp:
-                    return ffmpegSupport.supportsAnimatedWebP
-                }
+        guard fileCategory == .media || fileCategory == .image else { return [] }
+        return ExportFormat.allCases.filter { format in
+            if fileCategory == .media && isAudioPreview && format.group != "音频" { return false }
+            if fileCategory == .image && ["视频","音频"].contains(format.group) { return false }
+            switch format {
+            case .png,.jpg,.tiff,.bmp: return true
+            case .heic: return (CGImageDestinationCopyTypeIdentifiers() as! [String]).contains(UTType.heic.identifier)
+            case .gif: return ffmpegSupport.isInstalled
+            case .webp: return fileCategory == .image || (ffmpegSupport.isInstalled && ["/opt/homebrew/bin/img2webp","/usr/local/bin/img2webp"].contains{FileManager.default.isExecutableFile(atPath:$0)})
+            case .apng: return ffmpegSupport.supportsEncoder("apng")
+            case .mp4,.mov,.mkv: return ffmpegSupport.supportsEncoder("libx264")
+            case .webm: return ffmpegSupport.supportsEncoder("libvpx-vp9")
+            case .mp3: return ffmpegSupport.supportsEncoder("libmp3lame")
+            case .m4a: return ffmpegSupport.supportsEncoder("aac")
+            case .wav: return ffmpegSupport.supportsEncoder("pcm_s16le")
+            case .flac: return ffmpegSupport.supportsEncoder("flac")
             }
-        case .image:
-            return ExportFormat.allCases.filter { format in
-                switch format {
-                case .png:
-                    return true
-                case .gif:
-                    return ffmpegSupport.isInstalled
-                case .apng:
-                    return ffmpegSupport.isInstalled && ffmpegSupport.supportsEncoder("apng")
-                case .webp:
-                    return true
-                case .mp4, .mov, .webm, .mp3, .wav:
-                    return false
-                }
-            }
-        default:
-            return []
         }
     }
 
@@ -5215,18 +4953,7 @@ struct PreviewContentView: View {
             }
             return previewImage
         case .pdf:
-            if pdfController.pageImages.indices.contains(pdfController.currentPageIndex) {
-                return pdfController.pageImages[pdfController.currentPageIndex]
-            }
-            guard let document = pdfController.document,
-                  let page = document.page(at: pdfController.currentPageIndex) else {
-                return previewImage
-            }
-            let bounds = page.bounds(for: .mediaBox)
-            let maxEdge: CGFloat = 1800
-            let scale = maxEdge / max(bounds.width, bounds.height, 1)
-            let size = NSSize(width: max(bounds.width * scale, 1), height: max(bounds.height * scale, 1))
-            return page.thumbnail(of: size, for: .mediaBox)
+            return pdfController.currentImage ?? previewImage
         default:
             return nil
         }
@@ -5271,7 +4998,92 @@ struct PreviewContentView: View {
         }
     }
 
+    private func exportFontSubset() {
+        guard !isConverting else { return }
+        let alert = NSAlert(); alert.messageText = "提取字体字符"
+        alert.informativeText = "只保留下方输入的字符，另存为新字体。默认保留英文、数字和常用符号，剔除中文；也可以添加想保留的字。"
+        let field = NSTextField(wrappingLabelWithString:FontSubsetExporter.defaultCharacters)
+        field.isEditable = true; field.isSelectable = true; field.isBordered = true; field.drawsBackground = true
+        field.frame = NSRect(x:0,y:0,width:440,height:110)
+        alert.accessoryView = field; alert.addButton(withTitle:"选择保存位置"); alert.addButton(withTitle:"取消")
+        guard alert.runModal() == .alertFirstButtonReturn, !field.stringValue.isEmpty else { return }
+        let panel = NSSavePanel(); panel.directoryURL = FileManager.default.urls(for:.downloadsDirectory,in:.userDomainMask).first
+        panel.nameFieldStringValue = fileURL.deletingPathExtension().lastPathComponent + "_提取." + fileURL.pathExtension
+        panel.allowedContentTypes = [UTType(filenameExtension:fileURL.pathExtension) ?? .data]; panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let source = fileURL, characters = field.stringValue
+        isConverting = true
+        Task { @MainActor in
+            defer { isConverting = false }
+            do {
+                let message = try await FontSubsetExporter.run(source:source,destination:destination,characters:characters)
+                conversionStatus = ConversionStatus(title:"字体提取完成",message:message,outputURL:destination,isSuccess:true)
+                NSWorkspace.shared.activateFileViewerSelecting([destination])
+            } catch { conversionStatus = ConversionStatus(title:"字体提取失败",message:error.localizedDescription,outputURL:nil,isSuccess:false) }
+        }
+    }
+
+    private func exportPreviewClip(_ format: ClipExportFormat) {
+        guard !isConverting else { return }
+        let source = fileURL
+        let panel = NSSavePanel()
+        panel.directoryURL = format.isLivePhoto ? FileManager.default.urls(for:.downloadsDirectory,in:.userDomainMask).first : source.deletingLastPathComponent()
+        panel.nameFieldStringValue = source.deletingPathExtension().lastPathComponent + (format.isLivePhoto ? "_实况图." : "_转换.") + format.fileExtension
+        panel.allowedContentTypes = [UTType(filenameExtension:format.fileExtension) ?? .data]
+        if format == .livePhoto { panel.message = "保存为一个实况照片包（.pvt），默认存到下载，不写入相册。" }
+        if format == .harmonyPhoto { panel.message = "鸿蒙动态照片 JPG（测试版）：保留动态视频，图库识别需真机确认。" }
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        isConverting = true; conversionStatus = nil
+        Task { @MainActor in
+            defer { isConverting = false }
+            do {
+                let asset = AVURLAsset(url:source)
+                let duration = try await asset.load(.duration).seconds
+                guard duration.isFinite, duration > 0 else { throw NSError(domain:"无法读取视频时长",code:1) }
+                let hasAudio = try await !asset.loadTracks(withMediaType:.audio).isEmpty
+                let edits = TimelineEdits(duration:duration,fps:30,hasAudio:hasAudio)
+                let id = edits.state.timeline.tracks[0].segments[0].id
+                try await ClipExport.export(url:source,state:edits.state,clipID:id,format:format,to:destination)
+                conversionStatus = ConversionStatus(title:"导出完成",message:destination.lastPathComponent,outputURL:destination,isSuccess:true)
+                if format == .livePhoto { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
+            } catch { conversionStatus = ConversionStatus(title:"转换失败",message:error.localizedDescription,outputURL:nil,isSuccess:false) }
+        }
+    }
+
+    private func exportStillFrame(_ format: ExportFormat) {
+        let panel = NSSavePanel(); panel.directoryURL = fileURL.deletingLastPathComponent()
+        panel.allowedContentTypes = [format.contentType]; panel.canCreateDirectories = true
+        panel.nameFieldStringValue = fileURL.deletingPathExtension().lastPathComponent + "_画面." + format.fileExtension
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let source = fileURL, time = videoManager.player?.currentTime() ?? .zero
+        guard source.resolvingSymlinksInPath() != destination.resolvingSymlinksInPath() else { return }
+        let image = fileCategory == .image ? previewExportImage()?.quickPeekCGImage : nil
+        isConverting = true
+        Task { @MainActor in
+            defer { isConverting = false }
+            do {
+                let frame: CGImage
+                if let image { frame = image }
+                else {
+                    let generator = AVAssetImageGenerator(asset:AVURLAsset(url:source)); generator.appliesPreferredTrackTransform = true
+                    frame = try await generator.image(at:time).image
+                }
+                let data = NSMutableData()
+                guard let encoder = CGImageDestinationCreateWithData(data,format.contentType.identifier as CFString,1,nil) else { throw NSError(domain:"图片格式暂不支持",code:1) }
+                CGImageDestinationAddImage(encoder,frame,[kCGImageDestinationLossyCompressionQuality:0.95] as CFDictionary)
+                guard CGImageDestinationFinalize(encoder) else { throw NSError(domain:"图片编码失败",code:1) }
+                try (data as Data).write(to:destination,options:.atomic)
+                conversionStatus = ConversionStatus(title:"导出完成",message:destination.lastPathComponent,outputURL:destination,isSuccess:true)
+            } catch { conversionStatus = ConversionStatus(title:"导出失败",message:error.localizedDescription,outputURL:nil,isSuccess:false) }
+        }
+    }
+
     private func exportWithFFmpeg(target: ExportFormat) {
+        if [.png,.jpg,.heic,.tiff,.bmp].contains(target) { exportStillFrame(target); return }
+        if fileCategory == .media && !isAudioPreview && (target == .gif || target == .webp) {
+            exportPreviewClip(target == .gif ? .gif : .webp); return
+        }
         if target == .png {
             exportImageAsPNG()
             return
@@ -5301,28 +5113,38 @@ struct PreviewContentView: View {
         panel.nameFieldStringValue = fileURL.deletingPathExtension().lastPathComponent + "_preview." + target.fileExtension
         panel.allowedContentTypes = [target.contentType]
         panel.canCreateDirectories = true
+        panel.directoryURL = fileURL.deletingLastPathComponent()
 
         guard panel.runModal() == .OK, let outputURL = panel.url else { return }
 
+        guard outputURL.resolvingSymlinksInPath() != fileURL.resolvingSymlinksInPath() else {
+            conversionStatus = ConversionStatus(title:"请选择其他文件名",message:"不能覆盖原文件。",outputURL:nil,isSuccess:false); return
+        }
+        let staging = outputURL.deletingLastPathComponent().appendingPathComponent(".QuickPeek-"+UUID().uuidString).appendingPathExtension(target.fileExtension)
         isConverting = true
         convertingTarget = target
         conversionStatus = nil
-        let args = ffmpegArguments(inputPath: fileURL.path, outputPath: outputURL.path, target: target)
+        let args = ffmpegArguments(inputPath: fileURL.path, outputPath: staging.path, target: target)
 
         DispatchQueue.global(qos: .userInitiated).async {
+            defer { try? FileManager.default.removeItem(at:staging) }
             let process = Process()
             let pipe = Pipe()
             process.executableURL = ffmpegURL
-            process.arguments = args
+            process.arguments = ["-hide_banner","-loglevel","error","-nostdin"] + args
             process.standardOutput = pipe
             process.standardError = pipe
 
             do {
                 try process.run()
-                process.waitUntilExit()
                 let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
                 let outputMessage = String(data: outputData, encoding: .utf8) ?? ""
 
+                if process.terminationStatus == 0 {
+                    if FileManager.default.fileExists(atPath:outputURL.path) { _ = try FileManager.default.replaceItemAt(outputURL,withItemAt:staging) }
+                    else { try FileManager.default.moveItem(at:staging,to:outputURL) }
+                }
                 DispatchQueue.main.async {
                     isConverting = false
                     convertingTarget = nil
@@ -5719,6 +5541,14 @@ struct PreviewContentView: View {
 
     private func ffmpegArguments(inputPath: String, outputPath: String, target: ExportFormat) -> [String] {
         switch target {
+        case .jpg,.heic,.tiff,.bmp:
+            return ["-y","-i",inputPath,"-frames:v","1",outputPath]
+        case .mkv:
+            return ["-y","-i",inputPath,"-c:v","libx264","-crf","18","-c:a","aac",outputPath]
+        case .m4a:
+            return ["-y","-i",inputPath,"-vn","-c:a","aac","-b:a","192k",outputPath]
+        case .flac:
+            return ["-y","-i",inputPath,"-vn","-c:a","flac",outputPath]
         case .png:
             return [
                 "-y",
@@ -5826,6 +5656,7 @@ struct PreviewContentView: View {
         }
         let ext = fileURL.pathExtension.lowercased(); heroFormat = ext.uppercased()
         if settings.showFormat { items.append(MetaItem(label: "文件格式", value: ext.uppercased())) }
+        if isFontFile { fileCategory = .other; metadata = items; finishLoadingPreview(); return }
         let webExts: Set<String> = ["html","htm","xhtml","shtml"]
         let svgExts: Set<String> = ["svg"]
         let codeExts: Set<String> = ["swift","py","js","ts","jsx","tsx","java","kt","c","cpp","h","m","mm","rs","go","rb","php","css","scss","json","xml","yaml","yml","toml","md","txt","text","log","out","err","trace","dump","sh","bash","zsh","sql","r","lua","dart","vue","svelte","ini","cfg","conf","config","properties","env","editorconfig","gitconfig"]
@@ -6382,79 +6213,18 @@ private final class ResizeExportAccessoryView: NSView, NSTextFieldDelegate {
     }
 }
 
-private enum ExportFormat: CaseIterable, Hashable {
-    case png
-    case gif
-    case webp
-    case apng
-    case mp4
-    case mov
-    case webm
-    case mp3
-    case wav
-
-    var displayName: String {
+private enum ExportFormat: String, CaseIterable, Hashable {
+    case png, jpg, heic, tiff, bmp, gif, webp, apng, mp4, mov, mkv, webm, mp3, m4a, wav, flac
+    var displayName: String { " " + menuLabel }
+    var menuLabel: String { rawValue == "webp" ? "WebP" : rawValue.uppercased() }
+    var fileExtension: String { self == .apng ? "png" : rawValue }
+    var contentType: UTType { UTType(filenameExtension:fileExtension) ?? .data }
+    var group: String {
         switch self {
-        case .png: return " PNG"
-        case .gif: return " GIF"
-        case .webp: return " WebP"
-        case .apng: return " APNG"
-        case .mp4: return " MP4"
-        case .mov: return " MOV"
-        case .webm: return " WebM"
-        case .mp3: return " MP3"
-        case .wav: return " WAV"
-        }
-    }
-
-    var menuLabel: String {
-        switch self {
-        case .png: return "PNG"
-        case .gif: return "GIF"
-        case .webp: return "WebP"
-        case .apng: return "APNG"
-        case .mp4: return "MP4"
-        case .mov: return "MOV"
-        case .webm: return "WebM"
-        case .mp3: return "MP3"
-        case .wav: return "WAV"
-        }
-    }
-
-    var fileExtension: String {
-        switch self {
-        case .png: return "png"
-        case .gif: return "gif"
-        case .webp: return "webp"
-        case .apng: return "png"
-        case .mp4: return "mp4"
-        case .mov: return "mov"
-        case .webm: return "webm"
-        case .mp3: return "mp3"
-        case .wav: return "wav"
-        }
-    }
-
-    var contentType: UTType {
-        switch self {
-        case .png:
-            return .png
-        case .gif:
-            return .gif
-        case .webp:
-            return UTType(filenameExtension: "webp") ?? .data
-        case .apng:
-            return .png
-        case .mp4:
-            return .mpeg4Movie
-        case .mov:
-            return .movie
-        case .webm:
-            return UTType(filenameExtension: "webm") ?? .movie
-        case .mp3:
-            return .mp3
-        case .wav:
-            return .wav
+        case .png,.jpg,.heic,.tiff,.bmp: "图片 / 当前画面"
+        case .gif,.webp,.apng: "动图"
+        case .mp4,.mov,.mkv,.webm: "视频"
+        case .mp3,.m4a,.wav,.flac: "音频"
         }
     }
 }

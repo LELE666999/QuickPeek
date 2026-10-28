@@ -5,6 +5,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case general = "通用"
     case display = "显示项"
     case openWith = "打开方式"
+    case ai = "AI"
     case about = "关于"
 
     var id: String { rawValue }
@@ -14,6 +15,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: return "gearshape"
         case .display: return "list.bullet"
         case .openWith: return "arrow.up.forward.app"
+        case .ai: return "sparkles"
         case .about: return "info.circle"
         }
     }
@@ -83,6 +85,7 @@ struct SettingsView: View {
                     case .general: generalTab
                     case .display: displayTab
                     case .openWith: openWithTab
+                    case .ai: AISettingsView()
                     case .about: aboutTab
                     }
                 }

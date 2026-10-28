@@ -12,6 +12,7 @@ final class TimelineEditorSession {
     var edits = TimelineEdits(duration: 0, fps: 30, hasAudio: false)
     var ready = false
     var busy = false
+    var batchProgress: String?
     var rebuilding = false
     var error: String?
     var errorTitle = "片段剪辑"
@@ -169,6 +170,66 @@ final class TimelineEditorSession {
             }
         }
     }
+    func exportSelectedLivePhotos() {
+        guard ready, !busy else { return }
+        let snapshot = edits.state
+        let count = ClipExport.selectedVideoIDs(in:snapshot).count
+        guard count > 0 else { return }
+        player.pause(); playing = false; busy = true
+        let panel = NSOpenPanel()
+        panel.title = "批量导出 \(count) 段实况图"
+        panel.prompt = "导出到此文件夹"
+        panel.message = "每段独立导出，保留声音，不写入相册。建议每段 1.5–3 秒；鸿蒙格式仍需真机确认。"
+        let choice = NSPopUpButton(frame:NSRect(x:0,y:0,width:320,height:28))
+        choice.addItems(withTitles:["苹果 + 鸿蒙（测试版）","仅苹果实况图（.pvt）","仅鸿蒙动态照片（.jpg，测试版）"])
+        panel.accessoryView = choice
+        panel.canChooseFiles = false; panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false; panel.canCreateDirectories = true
+        panel.directoryURL = FileManager.default.urls(for:.downloadsDirectory,in:.userDomainMask).first
+        let completion: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let parent = panel.url else { self.busy = false; return }
+            let formats: [ClipExportFormat] = choice.indexOfSelectedItem == 1 ? [.livePhoto] : (choice.indexOfSelectedItem == 2 ? [.harmonyPhoto] : [.livePhoto,.harmonyPhoto])
+            self.batchProgress = "正在导出 0 / \(count * formats.count)"
+            Task {
+                defer { self.busy = false; self.batchProgress = nil }
+                do {
+                    let folder = try await ClipExport.exportSelectedLivePhotos(url:self.url,state:snapshot,to:parent,formats:formats) { done,total in
+                        await MainActor.run { self.batchProgress = "正在导出 \(done) / \(total)" }
+                    }
+                    NSWorkspace.shared.activateFileViewerSelecting([folder])
+                } catch { self.report(error,operation:"批量导出实况图失败") }
+            }
+        }
+        if let window = NSApp.keyWindow { panel.beginSheetModal(for:window,completionHandler:completion) }
+        else { panel.begin(completionHandler:completion) }
+    }
+
+    func exportClip(_ id: UUID, format: ClipExportFormat) {
+        guard ready, !busy, let index = edits.state.timeline.tracks.filter({ $0.kind == .video }).flatMap(\.segments).firstIndex(where: { $0.id == id }) else { return }
+        let snapshot = edits.state
+        player.pause(); playing = false; busy = true
+        let panel = NSSavePanel()
+        panel.title = format.title.replacingOccurrences(of:"…",with:"")
+        panel.prompt = "导出"
+        panel.message = format == .harmonyPhoto ? "保存为鸿蒙动态照片 JPG（测试版），保留动态视频；图库识别需真机确认。" : format == .livePhoto ? "将当前片段保存为一个实况照片包（.pvt），默认存到下载，不写入相册。" : "仅导出右键点中的片段，请选择保存位置。"
+        panel.directoryURL = format.isLivePhoto ? FileManager.default.urls(for:.downloadsDirectory,in:.userDomainMask).first : url.deletingLastPathComponent()
+        panel.canCreateDirectories = true
+        let name = url.deletingPathExtension().lastPathComponent + "_片段\(index+1)"
+        panel.allowedContentTypes = [UTType(filenameExtension:format.fileExtension) ?? .data]
+        panel.nameFieldStringValue = name + "." + format.fileExtension
+        let completion: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let destination = panel.url else { self.busy = false; return }
+            Task {
+                defer { self.busy = false }
+                do {
+                    try await ClipExport.export(url:self.url,state:snapshot,clipID:id,format:format,to:destination)
+                    NSWorkspace.shared.activateFileViewerSelecting([destination])
+                } catch { self.report(error,operation:"片段导出失败") }
+            }
+        }
+        if let window = NSApp.keyWindow { panel.beginSheetModal(for:window,completionHandler:completion) }
+        else { panel.begin(completionHandler:completion) }
+    }
     private func writeExport(to destination: URL) {
         guard destination.resolvingSymlinksInPath().standardizedFileURL != url.resolvingSymlinksInPath().standardizedFileURL else {
             busy = false; errorTitle = "请选择其他文件名"; errorDetails = ""; error = "请另存为副本，不能覆盖原视频。"; return
@@ -223,7 +284,7 @@ struct TimelineEditorView: View {
                         Text("点击时间线定位，⌘B / Control-B 分割。\n⌘点击多选，Shift 点击连续选择，空白处拖动框选。\n单击定位播放头；长按片段浮起后拖动排序，松手接拢。\nOption-Shift 拖动自由移动，靠近边缘自动吸附。\n拖动两端裁剪并衔接；Option 拖动平移时间轴。\n音画默认关联；右键可解除关联，分别编辑。\nDelete 删除，⌘Z 撤销，⇧⌘Z 重做。\n解除关联的片段删除后保留空隙，避免其他轨道错位。\n\n时间线数据基础：TimelineKitCore · MIT\nCopyright © 2026 Ivan Yang\n完整许可见应用内 ThirdPartyNotices.txt")
                             .font(.system(size: 13)).padding(20).frame(width: 430)
                     }
-                Button(session.busy ? "导出中…" : "导出副本") { session.export() }
+                Button(session.batchProgress ?? (session.busy ? "导出中…" : "导出副本")) { session.export() }
                     .buttonStyle(.borderedProminent).disabled(!session.ready || session.busy || session.edits.duration == 0)
             }.padding(12)
             Divider()
@@ -704,7 +765,30 @@ private final class EditTimelineCanvas: NSView {
         for (title,selector) in [("在播放头处分割  ⌘B",#selector(split)),("解除音画关联",#selector(unlink)),("删除所选片段",#selector(deleteClips)),("删除并闭合全部轨道空隙",#selector(rippleDelete)),("撤销",#selector(undoEdit))] {
             let item = NSMenuItem(title:title,action:selector,keyEquivalent:""); item.target = self; menu.addItem(item)
         }
+        if let (clip,trackIndex) = hit(p), session.edits.state.timeline.tracks[trackIndex].kind == .video {
+            menu.addItem(.separator())
+            let exportMenu = NSMenu()
+            for format in ClipExportFormat.allCases {
+                let item = NSMenuItem(title:format.title,action:#selector(exportClipItem(_:)),keyEquivalent:"")
+                item.target = self
+                item.representedObject = ["id":clip.id.uuidString,"format":format.rawValue]
+                exportMenu.addItem(item)
+            }
+            let item = NSMenuItem(title:"导出当前片段",action:nil,keyEquivalent:"")
+            item.submenu = exportMenu; menu.addItem(item)
+        }
+        let selectedCount = ClipExport.selectedVideoIDs(in:session.edits.state).count
+        if selectedCount > 1 {
+            menu.addItem(.separator())
+            let item = NSMenuItem(title:"导出所选 \(selectedCount) 段为实况图…",action:#selector(exportSelectedLivePhotos),keyEquivalent:"")
+            item.target = self; menu.addItem(item)
+        }
         return menu
+    }
+    @objc private func exportSelectedLivePhotos() { session?.exportSelectedLivePhotos() }
+    @objc private func exportClipItem(_ sender: NSMenuItem) {
+        guard let values = sender.representedObject as? [String:String], let rawID = values["id"], let id = UUID(uuidString:rawID), let rawFormat = values["format"], let format = ClipExportFormat(rawValue:rawFormat) else { return }
+        session?.exportClip(id,format:format)
     }
     @objc private func split() { session?.split() }
     @objc private func unlink() { session?.change { $0.unlinkSelection() } }

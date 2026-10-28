@@ -211,6 +211,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.handleSpaceDown()
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isEditable { return event }
             guard event.keyCode == UInt16(kVK_Space),
                   event.modifierFlags.intersection([.command, .option, .shift, .control]).isEmpty else { return event }
             if TapSharedState.shared.timelineEditing { return event }
@@ -888,9 +889,8 @@ private func spaceKeyTapCallback(
         return Unmanaged.passRetained(event)
     }
 
-    // If Finder is front, check whether the user is currently editing text
-    // (e.g. renaming a file). In that case, let the space key through.
-    if isFinderFront && !isVisible {
+    // Preserve spaces while renaming in Finder or typing in QuickPeek (font samples/save panels).
+    if (isFinderFront && !isVisible) || isQuickPeekFront {
         if let finderApp = frontApp {
             let appRef = AXUIElementCreateApplication(finderApp.processIdentifier)
             var focusedRaw: AnyObject?

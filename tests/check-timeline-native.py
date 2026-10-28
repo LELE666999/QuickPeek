@@ -4,8 +4,8 @@ from pathlib import Path
 import subprocess, tempfile
 root=Path(__file__).resolve().parents[1]
 pkg=root/'QuickPeek/Packages/QuickPeekTimeline'
-subprocess.run(['swift','build','--package-path',str(pkg)],check=True)
-build=pkg/'.build/arm64-apple-macosx/debug'
+subprocess.run(['xcrun','swift','build','--package-path',str(pkg)],check=True)
+build=Path(subprocess.check_output(['xcrun','swift','build','--package-path',str(pkg),'--show-bin-path'],text=True).strip())
 source=(root/'QuickPeek/QuickPeek/TimelineEditorView.swift').read_text()
 source=source.replace('Library/Logs/QuickPeek/editor-errors.log','Library/Logs/QuickPeek/tests/editor-errors.log').replace('private func continueEdgeScroll()', 'fileprivate func continueEdgeScroll()').replace('private var dragPreview:', 'fileprivate var dragPreview:').replace('private var isClipLifted', 'fileprivate var isClipLifted').replace('private var displayRects:', 'fileprivate var displayRects:').replace('_session = State(initialValue: TimelineEditorSession(url: fileURL))', '_session = State(initialValue: NativeSnapshotSession.shared!)').replace('.task { await session.load() }', '')
 source+='''
@@ -50,6 +50,18 @@ struct StableVideoPlayer: View {
         click(2);key("b",.control); click(4);key("b",.command)
         precondition(session.edits.state.timeline.tracks[0].segments.count == 3)
         click(1,60);click(5,60,.command)
+        precondition(session.edits.state.selection.count == 4)
+        // Context export captures the right-clicked clip, even when several clips are selected.
+        let contextID = session.edits.state.timeline.tracks[0].segments[2].id
+        let contextMenu = canvas.menu(for:mouse(.rightMouseDown,16+5*canvas.scale,60))!
+        let exports = contextMenu.items.first{$0.title == "导出当前片段"}!.submenu!
+        precondition(exports.items.count == 5)
+        precondition(contextMenu.items.contains{$0.title == "导出所选 2 段为实况图…"})
+        for item in exports.items {
+            let values = item.representedObject as! [String:String]
+            precondition(values["id"] == contextID.uuidString)
+            precondition(ClipExportFormat(rawValue:values["format"]!) != nil)
+        }
         precondition(session.edits.state.selection.count == 4)
         key("",[],51)
         precondition(abs(session.edits.duration-2)<0.001)
@@ -204,6 +216,8 @@ struct StableVideoPlayer: View {
 with tempfile.TemporaryDirectory(prefix='quickpeek-native-') as d:
     swift=Path(d)/'NativeTest.swift';swift.write_text(source)
     objects=list((build/'TimelineKitCore.build').glob('*.o'))+list((build/'QuickPeekTimeline.build').glob('*.o'))
+    if not objects: objects=[build/'TimelineKitCore.o',build/'QuickPeekTimeline.o']
+    modules=build/'Modules' if (build/'Modules').exists() else build
     exe=Path(d)/'test'
-    subprocess.run(['xcrun','swiftc','-parse-as-library','-swift-version','6','-I',str(build/'Modules'),str(swift),*map(str,objects),'-o',str(exe)],check=True)
+    subprocess.run(['xcrun','swiftc','-parse-as-library','-swift-version','6','-I',str(modules),str(swift),*map(str,objects),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)

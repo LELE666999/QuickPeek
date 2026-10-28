@@ -1,0 +1,70 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file: 'unsafe-inline' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'self' file:; font-src 'self' file: data:">
+<style>
+:root{color-scheme:dark}body{margin:0;background:transparent;font:13px system-ui;color:#bbb}#tools{position:sticky;top:0;z-index:3;display:flex;gap:10px;align-items:center;padding:10px;background:#24262bea;backdrop-filter:blur(12px);border-radius:10px}button{background:#ffffff16;color:#eee;border:1px solid #ffffff25;border-radius:999px;padding:7px 14px;cursor:pointer;backdrop-filter:blur(20px) saturate(150%);box-shadow:inset 0 1px #ffffff22;transition:background .18s,color .18s,transform .2s}button:hover{background:#2787e855;color:#91c9ff;transform:scale(1.04)}button:active{background:#1684ed99;transform:scale(.96)}button:focus-visible{outline:2px solid #1684ed;outline-offset:2px}@media(prefers-reduced-motion:reduce){button{transition:none}button:hover,button:active{transform:none}}.page{margin:16px auto;background:white;position:relative;box-shadow:0 4px 18px #0005}.page canvas{display:block;width:100%;height:100%}#pages{padding:0 16px 12px;overflow:auto}#status{padding:20px}#mode{margin-left:auto;font-size:11px}
+</style><div id="tools"><button id="minus">−</button><span id="zoom">100%</span><button id="plus">＋</button><button id="fit">适合宽度</button><span id="mode">PDF.js · 离线兼容 · 只读</span></div><div id="status">正在准备印章兼容视图…</div><main id="pages"></main>
+<script>
+window.addEventListener('error',e=>window.webkit.messageHandlers.documentViewer.postMessage({type:'error',message:e.message+' '+e.filename+':'+e.lineno}));
+window.addEventListener('securitypolicyviolation',e=>window.webkit.messageHandlers.documentViewer.postMessage({type:'error',message:'CSP '+e.violatedDirective+' '+e.blockedURI}));
+</script><script src="./engine/pdf.worker.js"></script><script src="./engine/pdf.js"></script><script>
+const send=body=>window.webkit.messageHandlers.documentViewer.postMessage(body);
+window.addEventListener('unhandledrejection',e=>send({type:'error',message:String(e.reason?.message||e.reason)}));
+try{
+ // Classic bundled scripts avoid file-origin module CORS. The local fake worker needs no server.
+ const pdfjs=window.pdfjsLib;
+ pdfjs.GlobalWorkerOptions.workerSrc=new URL('./engine/pdf.worker.js',document.baseURI).href;
+ let pdf,scale=1,generation=0,intent='display',scrollTimer,activePageObserver,lastData,currentPage=0;
+ const root=document.getElementById('pages'),status=document.getElementById('status');
+ const visiblePages=new Map();
+ const observer=new IntersectionObserver(entries=>{
+  for(const e of entries){if(e.isIntersecting)visiblePages.set(Number(e.target.dataset.index),e.intersectionRect.height);else visiblePages.delete(Number(e.target.dataset.index));}
+  const visible=[...visiblePages.entries()].sort((a,b)=>b[1]-a[1]);
+  if(visible.length&&visible[0][0]!==currentPage){currentPage=visible[0][0];send({type:'page',index:currentPage});}
+ },{threshold:[0,.1,.25,.5,.75,1]});
+ window.goToPDFPage=page=>{currentPage=page;document.getElementById('page-'+page)?.scrollIntoView({behavior:'smooth',block:'start'});};
+ async function render(start=0){
+  currentPage=start;visiblePages.clear();
+  const version=++generation;observer.disconnect();activePageObserver?.disconnect();root.replaceChildren();status.textContent='';
+  document.getElementById('zoom').textContent=Math.round(scale*100)+'%';
+  const width=Math.max(240,document.documentElement.clientWidth-52)*scale;
+  // Allocate only page placeholders; rasterize near the visible viewport, releasing offscreen canvases.
+  const pageObserver=new IntersectionObserver(async entries=>{
+   for(const entry of entries){
+    const holder=entry.target;
+    if(!entry.isIntersecting){if(holder._rendered&&!holder._rendering){holder.replaceChildren();holder._rendered=false}continue}
+    if(holder._rendered||holder._rendering)continue;holder._rendering=true;
+    try{
+     const page=await pdf.getPage(Number(holder.dataset.index)+1);if(version!==generation)return;
+     const base=page.getViewport({scale:1}),view=page.getViewport({scale:width/base.width});
+     holder.style.width=view.width+'px';holder.style.height=view.height+'px';
+     const canvas=document.createElement('canvas'),dpr=Math.min(devicePixelRatio,2);
+     const pixelScale=Math.min(dpr,4096/Math.max(view.width,view.height));
+     canvas.width=Math.ceil(view.width*pixelScale);canvas.height=Math.ceil(view.height*pixelScale);holder.replaceChildren(canvas);
+     await page.render({canvasContext:canvas.getContext('2d'),viewport:view,transform:[pixelScale,0,0,pixelScale,0,0],intent,annotationMode:pdfjs.AnnotationMode.ENABLE}).promise;
+     holder._rendered=true;
+    }catch(e){if(version===generation)send({type:'error',message:String(e.message)})}finally{holder._rendering=false}
+   }
+  },{rootMargin:'800px'});
+  activePageObserver=pageObserver;
+  for(let i=0;i<pdf.numPages;i++){
+   const page=await pdf.getPage(i+1);if(version!==generation){pageObserver.disconnect();return}
+   const v=page.getViewport({scale:1}),holder=document.createElement('section');holder.className='page';holder.id='page-'+i;holder.dataset.index=i;
+   holder.style.width=width+'px';holder.style.height=(width*v.height/v.width)+'px';root.append(holder);pageObserver.observe(holder);observer.observe(holder);
+  }
+  document.getElementById('page-'+start)?.scrollIntoView({block:'start'});
+ }
+ window.loadPDF=async(data,page,printAppearance)=>{
+  intent=printAppearance?'print':'display';
+  if(pdf && lastData===data){document.getElementById('mode').textContent='PDF.js · 离线兼容 · '+(printAppearance?'打印外观':'只读');await render(page);return;}
+  generation++;observer.disconnect();activePageObserver?.disconnect();if(pdf){const old=pdf;pdf=null;await old.destroy();}
+  const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0));
+  pdf=await pdfjs.getDocument({data:bytes,isEvalSupported:false,enableXfa:true,useSystemFonts:true,cMapUrl:new URL('./cmaps/',document.baseURI).href,cMapPacked:true,standardFontDataUrl:new URL('./standard_fonts/',document.baseURI).href,wasmUrl:new URL('./wasm/',document.baseURI).href}).promise;
+  lastData=data;document.getElementById('mode').textContent='PDF.js · 离线兼容 · '+(printAppearance?'打印外观':'只读');await render(page);
+ };
+ const zoom=delta=>{scale=Math.min(4,Math.max(.35,scale*delta));if(pdf)render(currentPage)};
+ document.getElementById('plus').onclick=()=>zoom(1.2);document.getElementById('minus').onclick=()=>zoom(1/1.2);document.getElementById('fit').onclick=()=>{scale=1;if(pdf)render(currentPage)};
+ // WebKit dispatches native trackpad pinch through gesture events.
+ let initial=1;document.addEventListener('gesturestart',e=>{e.preventDefault();initial=scale},{passive:false});document.addEventListener('gesturechange',e=>{e.preventDefault();scale=Math.max(.35,Math.min(4,initial*e.scale));clearTimeout(scrollTimer);scrollTimer=setTimeout(()=>{if(pdf)render(currentPage)},70)},{passive:false});
+ send({type:'ready'});
+}catch(e){document.getElementById('status').textContent='兼容组件未能启动：'+String(e.message);send({type:'error',message:String(e.stack||e.message)})}
+</script></html>
